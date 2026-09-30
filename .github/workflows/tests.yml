@@ -1,0 +1,78 @@
+name: tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 回归测试（Python ${{ matrix.python-version }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 刻意不装任何第三方包：核心扫描器声称「零第三方依赖」，
+      # CI 里保持干净环境才能证明这一点（tests/TestZeroDependency 还会再做静态校验）。
+      - name: 运行单元测试
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -s tests -v
+
+      - name: 阳性样本应命中 17 条告警并以退出码 1 结束
+        if: runner.os == 'Linux'
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python scanner.py samples/attack/venomous_server.py --sarif reports/scan_attack.sarif --quiet && exit 1 || test $? -eq 1
+
+      - name: 阴性样本应 0 告警并以退出码 0 结束
+        if: runner.os == 'Linux'
+        env:
+          PYTHONUTF8: "1"
+        run: python scanner.py samples/benign/clean_server.py --quiet
+
+      - name: TypeScript 样本也应被同一套告警码命中
+        if: runner.os == 'Linux'
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python mcp_shield.py scan samples/attack/venomous_server.ts --quiet && exit 1 || test $? -eq 1
+
+      - name: 上传 SARIF 到 GitHub 代码扫描
+        if: runner.os == 'Linux' && github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true   # 未开启 Code Scanning 的仓库不应因此失败
+        with:
+          sarif_file: reports/scan_attack.sarif
+          category: mcp-shield
+
+  rule-syntax:
+    name: 规则文件语法自检
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # semgrep 只在 CI 里用于校验 YAML 规则语法，不是运行依赖
+      - name: 安装 semgrep
+        run: pip install "semgrep>=1.90"
+      - name: 校验规则可被 semgrep 加载并命中阳性样本
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          semgrep --config rules/mcp-python.yaml samples/attack/venomous_server.py --json --quiet > /tmp/sg.json || true
+          python -c "import json;d=json.load(open('/tmp/sg.json'));n=len(d.get('results',[]));print('semgrep hits:',n);assert n>0,'规则未命中任何结果'"

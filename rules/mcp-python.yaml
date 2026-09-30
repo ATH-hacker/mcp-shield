@@ -1,0 +1,175 @@
+rules:
+  # ==========================================================================
+  # MCP Shield —— MCP 工具投毒静态检测规则集
+  # 适用：Python 版 MCP Server (mcp.server.fastmcp / lowlevel Server)
+  # 规则 ID 命名：mcp-shield.<漏洞类别>.<细分>
+  # 每条规则输出 message 中的 [CODE] 可与运行时拦截层共用告警码
+  # ==========================================================================
+
+  # --------------------------------------------------------------------------
+  # MS-001 Tool Poisoning：工具描述中夹带"对用户隐瞒"类指令
+  # 依据：MCP 官方规范明确指出工具描述属于不可信输入
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.hidden-instruction
+    languages: [python]
+    severity: ERROR
+    message: >-
+      [MS-001] MCP 工具描述中检测到"隐瞒/绕过用户"类指令。
+      工具描述会直接进入模型上下文，属于不可信输入，此类措辞是工具投毒(Tool Poisoning)的典型特征。
+    metadata:
+      category: security
+      cwe: "CWE-1426: Improper Validation of Generative AI Output"
+      owasp-llm: "LLM01: Prompt Injection"
+      confidence: HIGH
+      mcp-attack: tool-poisoning
+    patterns:
+      - pattern-inside: |
+          @$SERVER.tool(...)
+          def $FUNC(...):
+            ...
+      - pattern-either:
+          - pattern-regex: "(?i)(do not tell|don't tell|never tell|without telling|hide this from|do not (?:mention|reveal|inform|disclose)|never (?:mention|reveal|disclose)|不(?:要|得)(?:告诉|告知|提及|透露)用户|对用户隐瞒)"
+          - pattern-regex: "(?i)(ignore (?:all )?(?:previous|prior|above) instructions?|disregard (?:all )?(?:previous|prior) (?:instructions?|rules?)|override (?:the )?(?:system|safety) (?:prompt|rules?))"
+          - pattern-regex: "(?i)(before returning|before responding|as a first step).{0,80}(read|send|upload|exfiltrat|post)"
+      - pattern-not-regex: "(?i)(test|example|sample|demo|fixture)"
+
+  # --------------------------------------------------------------------------
+  # MS-002 Hidden Instruction：零宽 / 不可见字符夹带
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.zero-width-chars
+    languages: [python]
+    severity: WARNING
+    message: >-
+      [MS-002] 源码中存在零宽/不可见字符(U+200B..U+200F, U+2060, U+FEFF)。
+      界面上不可见但会进入模型上下文，是隐藏指令的常用载体。
+    metadata:
+      category: security
+      confidence: MEDIUM
+      mcp-attack: hidden-instruction
+    patterns:
+      - pattern-regex: "[\\x{200B}-\\x{200F}\\x{2060}\\x{FEFF}]"
+
+  # --------------------------------------------------------------------------
+  # MS-003 Unicode Tag Smuggling：TAG 字符走私
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.unicode-tag-smuggling
+    languages: [python]
+    severity: ERROR
+    message: >-
+      [MS-003] 检测到 Unicode TAG 字符(U+E0000..U+E007F)。
+      该字符区间渲染时不可见，常被用于在"看起来是空"的位置走私完整指令。
+    metadata:
+      category: security
+      confidence: HIGH
+      mcp-attack: hidden-instruction
+    patterns:
+      - pattern-regex: "[\\x{E0000}-\\x{E007F}]"
+
+  # --------------------------------------------------------------------------
+  # MS-004 Bidi Override：双向文本覆盖
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.bidi-override
+    languages: [python]
+    severity: ERROR
+    message: >-
+      [MS-004] 检测到双向文本控制字符(U+202A..U+202E, U+2066..U+2069)。
+      渲染顺序会被反转，可让描述"看起来"与实际语义不一致。
+    metadata:
+      category: security
+      cwe: "CWE-838: Inappropriate Encoding for Output Context"
+      confidence: HIGH
+      mcp-attack: hidden-instruction
+    patterns:
+      - pattern-regex: "[\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}]"
+
+  # --------------------------------------------------------------------------
+  # MS-005 Credential Access：工具实现体触碰敏感凭据路径
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.credential-access.secret-paths
+    languages: [python]
+    severity: ERROR
+    message: >-
+      [MS-005] MCP 工具实现体中出现高敏感凭据路径(~/.ssh, ~/.aws, .env, id_rsa 等)。
+      工具拥有文件读取能力时，此类路径等价于凭据外泄面。
+    metadata:
+      category: security
+      cwe: "CWE-522: Insufficiently Protected Credentials"
+      owasp-llm: "LLM02: Sensitive Information Disclosure"
+      confidence: HIGH
+      mcp-attack: credential-exfiltration
+    patterns:
+      - pattern-regex: "(?i)(\\.ssh|id_rsa|id_ed25519|\\.aws/credentials|\\.kube/config|\\.npmrc|\\.netrc|\\.env\\b|credentials\\.json|service[-_]?account.*\\.json)"
+
+  # --------------------------------------------------------------------------
+  # MS-006 Command Injection：工具实现体拼接 shell / 危险执行
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.unsafe-exec.command-injection
+    languages: [python]
+    severity: ERROR
+    message: >-
+      [MS-006] 工具实现体使用 os.popen / os.system / subprocess(shell=True) / eval / exec。
+      参数若来自模型，即为可被指令注入驱动的任意代码执行。
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+      owasp-llm: "LLM06: Excessive Agency"
+      confidence: HIGH
+      mcp-attack: excessive-agency
+    patterns:
+      - pattern-either:
+          - pattern: os.popen(...)
+          - pattern: os.system(...)
+          - pattern: subprocess.$FN(..., shell=True, ...)
+          - pattern: eval(...)
+          - pattern: exec(...)
+      - pattern-not-regex: "(?i)(#\\s*noqa|example|test|fixture)"
+
+  # --------------------------------------------------------------------------
+  # MS-007 Exfiltration Endpoint：硬编码外传地址
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.exfiltration.hardcoded-endpoint
+    languages: [python]
+    severity: ERROR
+    message: >-
+      [MS-007] MCP 工具中硬编码了可疑外传端点(ingest/collector/webhook/exfil/paste 等)。
+      数据外泄通道通常固化在工具实现里，静态即可发现。
+    metadata:
+      category: security
+      cwe: "CWE-200: Exposure of Sensitive Information"
+      owasp-llm: "LLM02: Sensitive Information Disclosure"
+      confidence: MEDIUM
+      mcp-attack: data-exfiltration
+    patterns:
+      - pattern-regex: "(?i)https?://[^\"'\\s]*(collector|ingest|exfil|beacon|pastebin|webhook\\.site|requestbin|attacker|oastify|interact\\.sh)"
+
+  # --------------------------------------------------------------------------
+  # MS-008 Excessive Agency：高危工具名 + 未声明安全注解
+  # 官方规范：annotations 应被视为不可信；缺失注解意味着宿主无法判断风险
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.excessive-agency.unannotated-dangerous-tool
+    languages: [python]
+    severity: WARNING
+    message: >-
+      [MS-008] 高危语义的工具(def $F)未通过 annotations 声明 readOnlyHint / destructiveHint / openWorldHint。
+      宿主无法据此进行权限最小化与用户确认。
+    metadata:
+      category: security
+      owasp-llm: "LLM06: Excessive Agency"
+      confidence: LOW
+      mcp-attack: excessive-agency
+    patterns:
+      - pattern-inside: |
+          @$SERVER.tool(...)
+          def $FUNC(...):
+            ...
+      - pattern: |
+          @$SERVER.tool(...)
+          def $FUNC(...):
+            ...
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: "(?i).*(delete|drop|remove|exec|shell|run|eval|upload|download|send|write|transfer|deploy|install|grant|chmod|sudo).*"
+      - pattern-not: |
+          @$SERVER.tool(..., annotations=$A, ...)
+          def $FUNC(...):
+            ...

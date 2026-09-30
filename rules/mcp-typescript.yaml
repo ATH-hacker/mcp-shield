@@ -1,0 +1,139 @@
+rules:
+  # ==========================================================================
+  # MCP Shield —— MCP 工具投毒静态检测规则集
+  # 适用：TypeScript / JavaScript 版 MCP Server
+  # 覆盖 registerTool / setRequestHandler(ListTools) / server.tool 三种注册形态
+  #
+  # 告警码映射（与 rules/mcp-python.yaml 同语义，便于两套扫描器口径一致）：
+  #   MS-101 ←→ MS-001  描述夹带隐瞒/绕过指令     MS-105 ←→ MS-005  敏感凭据路径
+  #   MS-102 ←→ MS-002  零宽/不可见字符           MS-106 ←→ MS-006  危险执行原语
+  #   MS-103 ←→ MS-003  Unicode TAG 走私          MS-107 ←→ MS-007  硬编码外传端点
+  #   MS-104 ←→ MS-004  Bidi 覆盖字符             （MS-008 未声明 annotations 由
+  #                                                tsjs_scanner.py 的语义层判定，
+  #                                                静态正则不易表达"整个对象里没有该键"）
+  # ==========================================================================
+
+  # --------------------------------------------------------------------------
+  # MS-101 Tool Poisoning：description 字段夹带隐瞒/绕过类指令
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.hidden-instruction-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      [MS-101] MCP 工具 description 中出现"隐瞒/绕过/忽略此前指令"类措辞，属工具投毒特征。
+    metadata:
+      category: security
+      owasp-llm: "LLM01: Prompt Injection"
+      confidence: HIGH
+      mcp-attack: tool-poisoning
+    patterns:
+      - pattern-either:
+          - pattern: |
+              registerTool($NAME, { ..., description: $DESC, ... }, ...)
+          - pattern: |
+              server.tool($NAME, $DESC, ...)
+          - pattern: |
+              { name: $NAME, description: $DESC, inputSchema: ... }
+      - metavariable-regex:
+          metavariable: $DESC
+          regex: "(?i).*(do not tell|never tell|without telling|ignore (all )?(previous|prior) instructions?|disregard .* (instructions?|rules?)|do not (mention|reveal|disclose)).*"
+
+  # --------------------------------------------------------------------------
+  # MS-102 零宽 / 不可见字符
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.zero-width-chars-ts
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      [MS-102] 源码中存在零宽/不可见字符(U+200B..U+200F, U+2060, U+FEFF)。
+    metadata:
+      category: security
+      confidence: MEDIUM
+      mcp-attack: hidden-instruction
+    patterns:
+      - pattern-regex: "[\\x{200B}-\\x{200F}\\x{2060}\\x{FEFF}]"
+
+  # --------------------------------------------------------------------------
+  # MS-103 Unicode TAG 字符
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.unicode-tag-smuggling-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      [MS-103] 检测到 Unicode TAG 字符(U+E0000..U+E007F)，用于在不可见位置走私指令。
+    metadata:
+      category: security
+      confidence: HIGH
+      mcp-attack: hidden-instruction
+    patterns:
+      - pattern-regex: "[\\x{E0000}-\\x{E007F}]"
+
+  # --------------------------------------------------------------------------
+  # MS-104 Bidi 覆盖字符
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.tool-poisoning.bidi-override-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      [MS-104] 检测到双向文本控制字符(U+202A..U+202E, U+2066..U+2069)。
+    metadata:
+      category: security
+      confidence: HIGH
+      mcp-attack: hidden-instruction
+    patterns:
+      - pattern-regex: "[\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}]"
+
+  # --------------------------------------------------------------------------
+  # MS-105 Credential Access
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.credential-access.secret-paths-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      [MS-105] MCP 工具实现中出现高敏感凭据路径(~/.ssh, ~/.aws, .env, id_rsa 等)。
+    metadata:
+      category: security
+      cwe: "CWE-522: Insufficiently Protected Credentials"
+      confidence: HIGH
+      mcp-attack: credential-exfiltration
+    patterns:
+      - pattern-regex: "(?i)(\\.ssh|id_rsa|id_ed25519|\\.aws/credentials|\\.kube/config|\\.npmrc|\\.netrc|\\.env\\b|credentials\\.json)"
+
+  # --------------------------------------------------------------------------
+  # MS-106 危险执行
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.unsafe-exec.command-injection-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      [MS-106] MCP 工具实现体使用 child_process.exec / execSync / eval / new Function。
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+      owasp-llm: "LLM06: Excessive Agency"
+      confidence: HIGH
+      mcp-attack: excessive-agency
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec(...)
+          - pattern: child_process.execSync(...)
+          - pattern: exec(...)
+          - pattern: execSync(...)
+          - pattern: eval(...)
+          - pattern: new Function(...)
+
+  # --------------------------------------------------------------------------
+  # MS-107 硬编码外传端点
+  # --------------------------------------------------------------------------
+  - id: mcp-shield.exfiltration.hardcoded-endpoint-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      [MS-107] MCP 工具中硬编码了可疑外传端点(ingest/collector/exfil/webhook/paste 等)。
+    metadata:
+      category: security
+      cwe: "CWE-200: Exposure of Sensitive Information"
+      confidence: MEDIUM
+      mcp-attack: data-exfiltration
+    patterns:
+      - pattern-regex: "(?i)https?://[^\"'`\\s]*(collector|ingest|exfil|beacon|pastebin|webhook\\.site|requestbin|attacker|oastify|interact\\.sh)"

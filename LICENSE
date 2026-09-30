@@ -1,0 +1,28 @@
+MCP Shield —— 面向 MCP / Agent 工具链的投毒检测与运行时防护网关
+Copyright 2026 MCP Shield contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+────────────────────────────────────────────────────────────────────────
+说明（非法律条款，仅为便于阅读）：
+
+本项目采用 Apache-2.0 许可。选择它的原因：
+  1. 允许他人自由使用、修改、再分发，包括商用 —— 安全工具的检测规则
+     只有被广泛采用才有价值；
+  2. 包含明确的专利授权条款，比 MIT 更适合可能被企业集成的工具；
+  3. 明确**不采用 GPL** —— 本项目希望被 SAST 工具链、CI 流水线、
+     SIEM 平台自由集成，copyleft 会成为采用障碍。
+
+注意：Apache-2.0 第 7 条包含免责声明，本项目按"现状"提供，
+不对检出率、误报率或任何特定用途适用性作担保。详见上方英文原文。
+────────────────────────────────────────────────────────────────────────

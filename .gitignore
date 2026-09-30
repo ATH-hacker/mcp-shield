@@ -1,0 +1,35 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ── Node（仅截图脚本用得到，核心扫描器不需要 Node）──────
+node_modules/
+package-lock.json
+
+# ── 本项目自己的临时/生成物 ─────────────────────────────
+# 调试脚本与临时文件
+_dbg*.py
+_dbg*.txt
+# 扫描产物：可随手重跑，不入库（示例输出见 reports/README.md）
+reports/*.json
+reports/*.sarif
+reports/*.jsonl
+!reports/.gitkeep
+# 截图（体积大，且可由 scripts/shoot.js 重新生成）
+docs/shots/
+# 生成的 PPT / 离线单页（体积大，源在 docs/*.py 与 ui/ 里）
+docs/*.pptx
+docs/console_standalone.html
+
+# ── 编辑器 / 系统 ───────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

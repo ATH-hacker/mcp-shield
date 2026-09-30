@@ -1,0 +1,36 @@
+# ── MCP Shield 配置示例 ────────────────────────────────────────────────
+# 说明：MCP Shield 的核心扫描器**不需要任何配置文件**（零第三方依赖，
+# 内置 8 条规则即可运行）。本文件只用于调整「运行层取证」和「策略裁决」的
+# 行为，把你自己的环境参数固化下来，避免每次演示都手敲一长串命令行。
+#
+# 用法：
+#   python mcp_shield.py probe <server.py> --out reports/traffic.jsonl
+#   （本文件被 scripts/ui_server.py 与 scripts/build_standalone.py 读取；
+#     顶层脚本读取失败时会退回下面的默认值，不会中断运行）
+
+[scan]
+# 静态扫描的目标（相对项目根或绝对路径）
+targets = ["samples/attack", "samples/benign"]
+# 是否把 TS/JS 也纳入扫描（关闭可只扫 Python）
+include_tsjs = true
+# 退出码策略：有 ERROR 即返回 1，便于接进 CI 门禁
+fail_on_severity = "ERROR"
+
+[probe]
+# 运行层取证的超时（秒）。Server 冷启动慢时调大。
+timeout = 20.0
+# 报文落盘目录
+traffic_dir = "reports"
+# 要抓的 JSON-RPC 方法（按顺序）
+methods = ["initialize", "tools/list"]
+
+[policy]
+# 策略裁决：命中这些规则的任一即判 BLOCK（不把工具描述交给模型）
+block_on = ["MS-001", "MS-003", "MS-004", "MS-005", "MS-006", "MS-007"]
+# 命中即降级为 WARN（仍交给模型，但在控制台标红）
+warn_on = ["MS-002", "MS-008"]
+
+[scope]
+# 信任边界：MCP Shield 只对「工具描述与实现体」负责，
+# 不承诺检测模型自身的对齐问题，也不做网络层拦截。
+note = "被信任的文本直接进入模型上下文，是这一层威胁的根因"
