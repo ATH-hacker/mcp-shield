@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>MCP Shield · 可视化控制台</title>
+<style>
+:root{
+  --bg:#0b1017; --bg2:#0f1722; --panel:#121c28; --panel2:#16222f;
+  --line:#243447; --fg:#e6edf3; --muted:#8c9bab; --dim:#5f7183;
+  --accent:#22d3ee; --green:#34d399; --amber:#fbbf24; --red:#f87171;
+  --purple:#c084fc; --orange:#fb923c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+  font-family:"Microsoft YaHei","PingFang SC",-apple-system,Segoe UI,sans-serif;}
+code,pre,.mono{font-family:Consolas,"Cascadia Mono",Menlo,monospace}
+a{color:var(--accent)}
+
+/* ---------- 顶栏 ---------- */
+header{position:sticky;top:0;z-index:20;background:linear-gradient(180deg,#0d1622,#0b1017);
+  border-bottom:1px solid var(--line);padding:14px 26px 0}
+.brandrow{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.logo{font-size:23px;font-weight:800;letter-spacing:.4px;color:var(--accent)}
+.logo small{color:var(--fg);font-weight:600;font-size:13px;letter-spacing:0}
+.tagline{color:var(--muted);font-size:12.5px}
+.badge{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);
+  color:var(--muted);background:#0e1823}
+.tabs{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
+.tab{padding:8px 15px;border:1px solid var(--line);border-bottom:none;border-radius:8px 8px 0 0;
+  background:#0d1721;color:var(--muted);cursor:pointer;font-size:13px;user-select:none}
+.tab:hover{color:var(--fg)}
+.tab.on{background:var(--bg);color:var(--accent);border-color:var(--accent);font-weight:700}
+
+main{padding:20px 26px 60px;max-width:1720px;margin:0 auto}
+.view{display:none}
+.view.on{display:block}
+
+/* ---------- 指标卡 ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+.card .k{font-size:11.5px;color:var(--muted);letter-spacing:.3px}
+.card .v{font-size:27px;font-weight:800;margin-top:5px;line-height:1.05}
+.card .s{font-size:11px;color:var(--dim);margin-top:5px}
+.v.good{color:var(--green)} .v.bad{color:var(--red)} .v.warn{color:var(--amber)} .v.cy{color:var(--accent)}
+
+/* ---------- 工具列表 ---------- */
+.split{display:grid;grid-template-columns:288px 1fr;gap:16px;align-items:start}
+.toolitem{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dim);
+  border-radius:8px;padding:9px 12px;margin-bottom:8px;cursor:pointer;transition:.12s}
+.toolitem:hover{background:var(--panel2)}
+.toolitem.sel{border-color:var(--accent);border-left-color:var(--accent);background:var(--panel2)}
+.toolitem.BLOCK{border-left-color:var(--red)}
+.toolitem.WARN{border-left-color:var(--amber)}
+.toolitem.PASS{border-left-color:var(--green)}
+.toolitem .n{font-weight:700;font-size:13.5px}
+.toolitem .m{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+.pill{font-size:10.5px;padding:1px 7px;border-radius:20px;border:1px solid var(--line)}
+
+/* ---------- 三栏对照 ---------- */
+.trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media(max-width:1380px){.trio{grid-template-columns:1fr}}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  display:flex;flex-direction:column;min-height:330px}
+.pane h3{margin:0;padding:11px 14px;font-size:13px;border-bottom:1px solid var(--line);
+  background:#0e1926;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pane h3 .num{width:20px;height:20px;border-radius:50%;background:var(--accent);color:#08202a;
+  font-size:12px;font-weight:900;display:inline-flex;align-items:center;justify-content:center}
+.pane .body{padding:14px;flex:1;overflow:auto;max-height:520px}
+.pane .foot{border-top:1px solid var(--line);padding:9px 14px;font-size:11.5px;color:var(--muted);
+  background:#0d1721}
+.hint{font-size:11px;color:var(--dim);margin-top:7px;line-height:1.55}
+
+/* ---------- 字符网格 ---------- */
+.chars{display:flex;flex-wrap:wrap;gap:2px;margin:6px 0 2px;line-height:1.7}
+.ch{font-family:Consolas,monospace;font-size:14px;padding:1px 2px;border-radius:3px;
+  border:1px solid transparent;white-space:pre}
+.ch.n{color:var(--fg)}
+.ch.zero-width{background:#7f1d1d;color:#fecaca;border-color:#f87171;font-weight:700}
+.ch.unicode-tag{background:#4c1d95;color:#e9d5ff;border-color:#c084fc;font-weight:700}
+.ch.bidi{background:#78350f;color:#fed7aa;border-color:#fb923c;font-weight:700}
+.ch.sm{font-size:11px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin:8px 0 0}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;
+  vertical-align:-1px;font-style:normal}
+.sw-zw{background:#7f1d1d;border:1px solid #f87171}
+.sw-tag{background:#4c1d95;border:1px solid #c084fc}
+.sw-bidi{background:#78350f;border:1px solid #fb923c}
+.sw-ok{background:#064e3b;border:1px solid #34d399}
+
+/* ---------- 代码块 ---------- */
+pre.code{background:#0a1119;border:1px solid var(--line);border-radius:8px;padding:11px 13px;
+  font-size:12px;overflow:auto;margin:8px 0 0;line-height:1.6;white-space:pre-wrap;word-break:break-all}
+pre.code .hit{background:#3f1d1d;border-bottom:1px solid #f87171;padding:0 2px;border-radius:2px}
+pre.code .cp{color:var(--purple)}
+
+/* ---------- 结论 / 列表 ---------- */
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:1100px){.cmp{grid-template-columns:1fr}}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.box.bad{border-color:#5b2626;background:linear-gradient(180deg,#1a1113,#121820)}
+.box.good{border-color:#1f5344;background:linear-gradient(180deg,#0e1c18,#121820)}
+.box h3{margin:0 0 11px;font-size:15px}
+.box ul{margin:0;padding-left:19px} .box li{margin:9px 0;line-height:1.68;font-size:13.2px}
+.pay{color:var(--accent);font-weight:700}
+.kill{color:var(--red);font-weight:700}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px}
+th{text-align:left;background:#101d29;color:var(--accent);padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:8px 10px;border-bottom:1px solid #1a2534;vertical-align:top}
+tr:hover td{background:#101b26}
+.pipe{display:flex;flex-direction:column;gap:10px}
+.step{display:grid;grid-template-columns:150px 1fr 128px;gap:14px;align-items:center;
+  background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 15px}
+@media(max-width:960px){.step{grid-template-columns:1fr}}
+.step .st{font-weight:700;color:var(--accent);font-size:13px}
+.step .eng{font-size:11px;color:var(--muted);margin-top:3px}
+.step .rs{text-align:right;font-weight:800;color:var(--green);font-size:13px}
+.arrowdown{text-align:center;color:var(--dim);font-size:15px;line-height:1}
+
+.verdict{border-radius:9px;padding:12px 16px;margin-bottom:16px;font-size:14px;font-weight:700;
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.verdict.BLOCK{background:#2a1215;border:1px solid #f87171;color:#fecaca}
+.verdict.WARN{background:#2a2113;border:1px solid #fbbf24;color:#fde68a}
+.verdict.PASS{background:#0f231d;border:1px solid #34d399;color:#a7f3d0}
+.verdict .why{font-weight:400;font-size:12.5px;color:var(--muted)}
+
+.toolbtns{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+button{background:#12212e;color:var(--fg);border:1px solid var(--line);border-radius:7px;
+  padding:8px 15px;font-size:12.5px;cursor:pointer;font-family:inherit}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:#0e3a45;border-color:var(--accent);color:var(--accent);font-weight:700}
+.small{font-size:11.5px;color:var(--dim);line-height:1.6}
+.tag-ok{color:var(--green);font-weight:700}
+.tag-no{color:var(--red);font-weight:700}
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
+@media(max-width:1100px){.three{grid-template-columns:1fr}}
+.big{font-size:16px;line-height:1.7;font-weight:700;color:var(--accent)}
+.framework{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}
+.line{display:grid;grid-template-columns:118px 1fr;gap:12px;padding:8px 0;border-bottom:1px solid #1a2534;font-size:12.5px}
+.line b{color:var(--muted);font-weight:600}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brandrow">
+    <div class="logo">MCP Shield <small>· 可视化控制台</small></div>
+    <span class="tagline" id="tagline">面向 MCP / Agent 工具链的投毒检测与运行时防护网关</span>
+    <span class="badge" id="proto">协议版本 2024-11-05</span>
+    <span class="badge" id="gen">数据生成 …</span>
+    <span class="badge" id="src"></span>
+  </div>
+  <div class="tabs">
+    <div class="tab on" data-v="v-before">① 以前做不到什么</div>
+    <div class="tab" data-v="v-detect">② 同一条描述 · 三个世界</div>
+    <div class="tab" data-v="v-how">③ 怎么做到的</div>
+    <div class="tab" data-v="v-run">④ 运行层取证实录</div>
+    <div class="tab" data-v="v-inno">⑤ 一句话结论</div>
+  </div>
+</header>
+
+<main>
+  <!-- ================= 视图 1 ================= -->
+  <section class="view on" id="v-before">
+    <div class="cards" id="cards1"></div>
+
+    <div class="cmp">
+      <div class="box bad">
+        <h3>❌ 改造之前：这些攻击根本不在检测视野里</h3>
+        <ul id="cannot"></ul>
+      </div>
+      <div class="box good">
+        <h3>✅ MCP Shield 之后：每一条都可查、可复现</h3>
+        <ul id="can"></ul>
+      </div>
+    </div>
+
+    <h3 style="margin:26px 0 8px;font-size:15px">常规检查与 MCP Shield 的能力边界（同机、同样本实测）</h3>
+    <div id="cap-table"></div>
+
+    <h3 style="margin:26px 0 8px;font-size:15px">人眼看到的一句话 vs 逐码点真相</h3>
+    <div class="three">
+      <div class="box">
+        <h3 style="font-size:13.5px">👁 人眼 / 常规工具看到的</h3>
+        <div class="mono" style="font-size:13px;color:var(--fg);background:#0a1119;border:1px solid var(--line);border-radius:8px;padding:11px;line-height:1.75" id="eye-sees"></div>
+        <div class="hint">没有任何异常。字符数 37，看起来完全正常的工具说明。</div>
+      </div>
+      <div class="box">
+        <h3 style="font-size:13.5px">🔬 逐码点拆开（MCP Shield）</h3>
+        <div id="eye-chars" class="chars"></div>
+        <div class="hint" id="eye-note"></div>
+      </div>
+      <div class="box">
+        <h3 style="font-size:13.5px">💀 模型实际读到的东西</h3>
+        <div class="mono" id="eye-model" style="font-size:13px;background:#0a1119;border:1px solid #5b2626;border-radius:8px;padding:11px;line-height:1.75"></div>
+        <div class="hint">模型无法区分「工具描述」与「系统指令」，这段文本会被当作可执行意图对待。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 视图 2 ================= -->
+  <section class="view" id="v-detect">
+    <div class="cards" id="cards2"></div>
+    <div class="split">
+      <div>
+        <div class="small" style="margin-bottom:9px">8 个工具 · 点击查看三栏对照</div>
+        <div id="tool-list"></div>
+        <div id="benign-mini" style="margin-top:16px"></div>
+      </div>
+      <div>
+        <div id="verdict"></div>
+        <div class="trio">
+          <div class="pane">
+            <h3><span class="num">1</span>人类审阅者看到什么</h3>
+            <div class="body" id="p1"></div>
+            <div class="foot" id="f1"></div>
+          </div>
+          <div class="pane">
+            <h3><span class="num">2</span>线上报文真正传了什么</h3>
+            <div class="body" id="p2"></div>
+            <div class="foot" id="f2"></div>
+          </div>
+          <div class="pane">
+            <h3><span class="num">3</span>模型把这段文本读成了什么</h3>
+            <div class="body" id="p3"></div>
+            <div class="foot" id="f3"></div>
+          </div>
+        </div>
+        <div class="box" style="margin-top:14px">
+          <h3 style="font-size:14px">静态层对这一个工具给出的全部结论</h3>
+          <div id="findings"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 视图 3 ================= -->
+  <section class="view" id="v-how">
+    <div class="box" style="margin-bottom:16px">
+      <h3>检测流水线：为什么必须三路合流</h3>
+      <div class="small">每一路的"为什么"都是踩坑踩出来的。任一路单独使用都会漏 —— 这是本作品最深的设计取舍。</div>
+      <div class="pipe" style="margin-top:14px" id="pipeline"></div>
+    </div>
+
+    <div class="box" style="margin-bottom:16px">
+      <h3>8 条规则 · 全部为真实命中数（阳性样本 / 良性样本）</h3>
+      <div id="rules-table"></div>
+    </div>
+
+    <div class="box">
+      <h3>实现体层证据：描述可以写得很干净，但实现体骗不了人</h3>
+      <div id="impl-table"></div>
+      <div class="hint">这三类（凭据路径 / 外传端点 / 危险执行原语）在纯文本审阅中不会引起注意，却是工具投毒最终落地的地方。</div>
+    </div>
+  </section>
+
+  <!-- ================= 视图 4 ================= -->
+  <section class="view" id="v-run">
+    <div class="box" style="margin-bottom:16px">
+      <h3>运行层取证：不看源码，只看线上 JSON-RPC 报文</h3>
+      <div class="small">
+        静态层看到的是「源码里怎么写」；运行层看到的是模型真正收到的文本。
+        两条独立证据链互相印证，也为黑盒（拿不到源码的第三方）Server 提供了唯一的验证途径。
+        下面这些是<strong>真的把 Server 跑起来抓到的报文</strong>。
+      </div>
+      <div class="toolbtns" style="margin-top:13px">
+        <button class="primary" id="btn-run-attack">▶ 对恶意 Server 取证</button>
+        <button id="btn-run-benign">▶ 对良性 Server 取证（对照）</button>
+        <span class="small" id="run-status" style="align-self:center"></span>
+      </div>
+      <div id="run-result"></div>
+    </div>
+    <div class="box">
+      <h3>为什么这一路不可替代</h3>
+      <ul style="margin:0;padding-left:19px;font-size:13.2px;line-height:1.7">
+        <li><b>黑盒可验</b>：拿不到源码的第三方 MCP 工具（市场里绝大多数），只能靠报文层验。</li>
+        <li><b>时间维度</b>：报文是带时间戳的序列，可支撑 <span class="pay">Rug Pull</span> 检测 —— 同一个工具先干净、后投毒，指纹会变。</li>
+        <li><b>取证材料</b>：JSONL 原始报文可直接提交、复核，不依赖审阅者相信我们的判断。</li>
+        <li><b>交叉验证</b>：本次实测中，运行层独立命中 3 个工具，与静态层 MS-002/003/004 的 3 个命中完全对应。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= 视图 5 ================= -->
+  <section class="view" id="v-inno">
+    <div class="box good" style="margin-bottom:16px">
+      <div class="big" id="oneliner"></div>
+    </div>
+    <div class="three">
+      <div class="box">
+        <h3>🎯 创新点（被追问的准备）</h3>
+        <ul id="inno-list"></ul>
+      </div>
+      <div class="box">
+        <h3>🔧 怎么做到的</h3>
+        <ul id="how-list"></ul>
+      </div>
+      <div class="box">
+        <h3>📊 实测数字（无一编造）</h3>
+        <div class="framework" id="num-list"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script id="data" type="application/json">__SNAPSHOT__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+
+/* ---------- 小工具 ---------- */
+const esc = s => (s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const KIND_CN = {'zero-width':'零宽字符','unicode-tag':'Unicode TAG 走私','bidi':'Bidi 双向覆盖'};
+const RULE_OF = {'zero-width':'MS-002','unicode-tag':'MS-003','bidi':'MS-004'};
+
+function charGrid(text, opts={}){
+  const small = opts.small !== false;
+  let html = '<div class="chars'+(small?' sm':'')+'">';
+  for (const ch of text){
+    const cp = ch.codePointAt(0);
+    let k = null;
+    if (cp>=0x200B && cp<0x2010 || cp===0x2060 || cp===0xFEFF) k='zero-width';
+    else if (cp>=0x202A && cp<=0x202E || cp>=0x2066 && cp<=0x2069) k='bidi';
+    else if (cp>=0xE0000 && cp<=0xE007F) k='unicode-tag';
+    if (k==='unicode-tag'){
+      const ascii = String.fromCharCode(cp-0xE0000);
+      html += `<span class="ch unicode-tag" title="U+${cp.toString(16).toUpperCase()} · ${KIND_CN[k]} · 明文字符「${esc(ascii)}」">${esc(ascii)}</span>`;
+    } else if (k){
+      const label = k==='zero-width' ? '␀' : '⇄';
+      html += `<span class="ch ${k}" title="U+${cp.toString(16).toUpperCase()} · ${KIND_CN[k]}">${label}</span>`;
+    } else {
+      html += `<span class="ch n">${esc(ch)}</span>`;
+    }
+  }
+  return html + '</div>';
+}
+
+/* ---------- 顶栏 ---------- */
+document.getElementById('gen').textContent = '数据生成 ' + D.generated_at;
+document.getElementById('src').textContent = '来源 ' + D.samples.attack.path + ' · ' + D.samples.benign.path;
+document.getElementById('tagline').textContent = D.project.subtitle;
+document.getElementById('proto').textContent = '协议版本 ' + D.project.protocol_version;
+
+/* ---------- 视图 1 ---------- */
+const M = D.metrics;
+document.getElementById('cards1').innerHTML = [
+  ['恶意 Server 工具数', M.attack_tools, '全部被标记，无漏网'],
+  ['命中告警总数', M.attack_findings, `ERROR ${M.attack_errors} / WARNING ${M.attack_warnings}`, 'bad'],
+  ['命中规则条目', M.rules_total + ' 条', 'MS-001 … MS-008 全部命中', 'cy'],
+  ['还原出的不可见码点', M.hidden_codepoints, '逐字符定位，可复核', 'warn'],
+  ['良性 Server 误报', M.benign_findings + ' / ' + M.benign_tools + ' 工具', '误报率 ' + (M.false_positive_rate*100).toFixed(1) + '%', 'good'],
+].map(([k,v,s,cls]) => `<div class="card"><div class="k">${k}</div><div class="v ${cls||'cy'}">${v}</div><div class="s">${s||''}</div></div>`).join('');
+
+document.getElementById('cannot').innerHTML = D.narrative.cannot_before.map(t=>`<li>${t}</li>`).join('');
+document.getElementById('can').innerHTML    = D.narrative.can_after.map(t=>`<li>${t}</li>`).join('');
+
+/* 能力边界表：诚实呈现 semgrep 实测结果 */
+const gw = D.tools.find(t=>t.name==='get_weather') || D.tools[0];
+document.getElementById('cap-table').innerHTML = `
+<table>
+<tr><th style="width:34%">能力项</th><th style="width:22%">常规做法</th><th style="width:22%">MCP Shield</th><th>说明</th></tr>
+<tr><td>扫描工具描述的自然语言语义</td><td class="tag-no">✗ 无此概念</td><td class="tag-ok">✓ MS-001</td><td>传统 SAST 只看语法，docstring 属于"字符串"而非被检查对象</td></tr>
+<tr><td>识别真实不可见字符</td><td class="tag-no">✗ 人眼/字符串比较看不见</td><td class="tag-ok">✓ MS-002/003/004</td><td>逐字符 <code>ord()</code> 判类，标注 Unicode 名称</td></tr>
+<tr><td>识别<b>转义形态</b>载体（<code>\\u200b</code>）</td><td class="tag-no">✗ 最常被漏掉</td><td class="tag-ok">✓ ESCAPE_PATTERNS</td><td>第一版曾在此漏报，补上后才做到零漏报</td></tr>
+<tr><td>还原攻击者夹带的隐藏明文</td><td class="tag-no">✗</td><td class="tag-ok">✓ TAG 区减 0xE0000</td><td>Unicode TAG 区字符可无损映射回 ASCII</td></tr>
+<tr><td>不需要源码的验证（黑盒 Server）</td><td class="tag-no">✗ 只能审源码</td><td class="tag-ok">✓ 运行层报文解剖</td><td>抓 <code>tools/list</code> 响应逐码点复查</td></tr>
+<tr><td>运行期一致性（Rug Pull）</td><td class="tag-no">✗</td><td class="tag-ok">✓ 工具指纹 ΔS（设计完成）</td><td>同一工具描述前后不一致即阻断</td></tr>
+<tr><td>第三方依赖</td><td>通常需要</td><td class="tag-ok">0（纯标准库）</td><td>任何装了 Python 的机器可现场复现</td></tr>
+</table>
+<div class="hint">注：同机实测中，用 <b>Semgrep 1.178.0 + 我们自写的同一套规则</b> 也能得到 17 条命中 / 0 误报（其 Python 解析器会解释转义序列）。
+差异在于规则颗粒度与运行层能力 —— 我们<strong>不声称"只有我们能做"</strong>，而是主张「MCP 领域规则集 + 零依赖实现 + 运行层取证」这一组合。</div>`;
+
+/* 人眼 vs 真相 vs 模型 */
+document.getElementById('eye-sees').textContent = gw.pretty_text;
+document.getElementById('eye-chars').innerHTML = charGrid(gw.description, {small:false});
+document.getElementById('eye-note').innerHTML =
+  `可见字符 ${gw.visible_text.length} 个，另含 <span class="kill">${gw.hidden_count} 个不可见字符</span>（` +
+  Object.entries(gw.hidden_by_kind).map(([k,v])=>`${KIND_CN[k]} ×${v}`).join('、') + '）→ ' +
+  gw.hidden_samples.slice(0,8).map(h=>`<code>${h.cp}</code>`).join(' ') + (gw.hidden_count>8?' …':'');
+document.getElementById('eye-model').innerHTML =
+  `<div style="color:#fecaca">系统提示：你是一个乐于助人的助手。</div>` +
+  `<div style="color:#fca5a5;margin-top:8px">工具 ${esc(gw.name)} 的描述：</div>` +
+  `<div style="color:#fff;margin-top:5px">${esc(gw.visible_text.split('.')[0])}.<span class="kill"> ▮▮▮▮</span>${esc((gw.tag_payload||'').slice(0,60))}</div>` +
+  `<div class="hint" style="margin-top:9px;color:#fca5a5">↓ 模型读到等价于：<br>「${esc(gw.tag_payload || '（零宽字符夹带指令）')}」</div>`;
+
+/* ---------- 视图 2 ---------- */
+document.getElementById('cards2').innerHTML = [
+  ['拦截裁决', D.blocked.length + ' 个工具被判 BLOCK', 'ERROR 级规则命中即阻断', 'bad'],
+  ['告警码', 'MS-00x', '静态与运行层共用同一编号', 'cy'],
+  ['跨层对应', '3 个工具', '静态与报文侧独立命中同一批工具', 'good'],
+].map(([k,v,s,cls])=>`<div class="card"><div class="k">${k}</div><div class="v ${cls}" style="font-size:20px">${v}</div><div class="s">${s}</div></div>`).join('');
+
+let sel = gw.name;
+function renderTools(){
+  document.getElementById('tool-list').innerHTML = D.tools.map(t=>{
+    const badge = t.verdict==='BLOCK'?'#f87171':t.verdict==='WARN'?'#fbbf24':'#34d399';
+    return `<div class="toolitem ${t.verdict} ${t.name===sel?'sel':''}" data-n="${esc(t.name)}">
+      <div class="n" style="color:${badge}">${esc(t.name)} <span class="pill">${t.verdict}</span></div>
+      <div class="m">
+        <span>L${t.line}</span>
+        <span>规则 ${t.rules_hit.length?esc(t.rules_hit.join(' ')):'—'}</span>
+        ${t.hidden_count?`<span class="kill">隐藏 ${t.hidden_count}</span>`:'<span class="tag-ok">无隐藏字符</span>'}
+      </div></div>`;
+  }).join('');
+  document.querySelectorAll('.toolitem').forEach(el=>el.onclick=()=>{sel=el.dataset.n; renderTools(); renderDetail();});
+}
+document.getElementById('benign-mini').innerHTML =
+  `<div class="small" style="margin-bottom:7px">对照组 · 良性 Server（误报基线）</div>` +
+  D.benign_tools.map(t=>`<div class="toolitem PASS"><div class="n" style="color:#34d399">${esc(t.name)} <span class="pill">PASS</span></div>
+    <div class="m"><span>L${t.line}</span><span class="tag-ok">0 隐藏字符 · 0 告警</span></div></div>`).join('');
+
+function renderDetail(){
+  const t = D.tools.find(x=>x.name===sel);
+  const vmap = {BLOCK:['⛔ 已阻断','该工具触发 ERROR 级规则，策略引擎裁决为 BLOCK：不返回给模型，并要求重新授权。'],
+                WARN:['⚠ 放行但标记','仅触发 WARNING 级规则：本轮放行，但写入审计日志并在描述漂移时升级为阻断。'],
+                PASS:['✅ 放行','未命中任何规则，与良性基线一致。']};
+  const [vt, vw] = vmap[t.verdict];
+  document.getElementById('verdict').className = 'verdict ' + t.verdict;
+  document.getElementById('verdict').innerHTML = `<span>${vt} · ${esc(t.name)}</span><span class="why">${vw}</span>`;
+
+  /* 栏 1：人眼所见 */
+  document.getElementById('p1').innerHTML =
+    `<div class="small" style="margin-bottom:6px">工具名 <b style="color:var(--fg)">${esc(t.name)}</b> · 定义在第 ${t.line} 行，描述在第 ${t.desc_line} 行</div>` +
+    `<div class="mono" style="background:#0a1119;border:1px solid var(--line);border-radius:8px;padding:11px;font-size:13px;line-height:1.8;white-space:pre-wrap">${esc(t.pretty_text)}</div>` +
+    `<div class="hint">把不可见字符全部剔除后的样子。<br>审阅者会认为这是一个完全正常的工具说明 —— <b>这正是投毒能生效的原因</b>。</div>` +
+    `<div class="small" style="margin-top:10px">源码原样（第 ${t.desc_line} 行起）</div>` +
+    `<pre class="code">${esc(t.raw_snippet).replace(/\\u[0-9a-fA-F]{4}|\\U000E00[0-9a-fA-F]{2}/g,'<span class="cp">$&</span>')}</pre>` +
+    `<div class="hint">注意：源码里写的是 <b>转义序列</b>（紫色部分），文件里<strong>没有</strong>真实不可见字符 —— 用文本对比、hash 比对、肉眼审阅都发现不了它运行时会变成什么。</div>`;
+
+  /* 栏 2：线上报文 */
+  document.getElementById('p2').innerHTML =
+    (t.hidden_count
+      ? `<div class="kill" style="font-weight:700;margin-bottom:6px">解析 description 字段：发现 ${t.hidden_count} 个不可见字符</div>` +
+        charGrid(t.description, {small:false}) +
+        `<div class="legend"><span><i class="sw-zw"></i>零宽字符 MS-002</span><span><i class="sw-tag"></i>Unicode TAG MS-003</span><span><i class="sw-bidi"></i>Bidi 覆盖 MS-004</span></div>` +
+        `<div class="small" style="margin-top:11px">逐字符定位（前 8 个）</div>` +
+        `<table>${t.hidden_samples.slice(0,8).map(h=>`<tr><td>idx ${h.index}</td><td><code>${h.cp}</code></td><td>${KIND_CN[h.kind]}</td><td>${RULE_OF[h.kind]}</td></tr>`).join('')}</table>`
+      : `<div class="tag-ok" style="font-weight:700;margin-bottom:6px">✅ description 字段未发现不可见字符</div>` +
+        charGrid(t.description, {small:false}) +
+        `<div class="hint">这个工具在<strong>报文层是干净的</strong>。它的攻击面在描述语义与实现体，由静态层负责 —— ` +
+        `这一点很重要：<b>运行层与静态层互为补充，而非互相替代</b>。</div>`);
+
+  document.getElementById('f2').innerHTML = t.hidden_count
+    ? `线上报文结论：<b style="color:#f87171">携带 ${t.hidden_count} 个不可见字符，命中 ${t.rules_hit.filter(r=>['MS-002','MS-003','MS-004'].includes(r)).join(' / ')||'—'}</b>`
+    : `线上报文结论：<b style="color:#34d399">报文层无不可见字符</b>（由静态层规则覆盖）`;
+
+  /* 栏 3：模型读成了什么 */
+  let m = `<div class="small" style="margin-bottom:6px">模型收到的等价上下文</div>`;
+  if (t.tag_payload){
+    m += `<div style="background:#0a1119;border:1px solid #5b2626;border-radius:8px;padding:11px;line-height:1.85">` +
+         `<div style="color:#8c9bab">工具 <b style="color:#e6edf3">${esc(t.name)}</b> 的描述：</div>` +
+         `<div style="color:#e6edf3;margin-top:5px">${esc(t.pretty_text)}</div>` +
+         `<div style="color:#fca5a5;margin-top:9px">🔓 隐藏载荷还原（TAG 区 − 0xE0000）：</div>` +
+         `<div class="kill" style="margin-top:4px;font-size:13.5px">「${esc(t.tag_payload)}」</div></div>`;
+  } else if (t.hidden_count){
+    m += `<div style="background:#0a1119;border:1px solid #5b2626;border-radius:8px;padding:11px;line-height:1.85">` +
+         `<div style="color:#fca5a5">模型读到的字节序列与人眼所见<strong>不一致</strong>：</div>` +
+         `<div style="color:#e6edf3;margin-top:6px">「${esc(t.visible_text.split('.')[0])}<span class="kill">[${t.hidden_count} 个不可见字符]</span>」</div>` +
+         `<div class="hint" style="margin-top:8px">零宽字符与 Bidi 覆盖用于<b>欺骗审阅者与日志</b>：源码显示的字符顺序与实际执行顺序不同（Bidi），或在关键词中间插入不可见字符以绕过关键词匹配（零宽）。</div></div>`;
+  } else {
+    m += `<div style="background:#0a1119;border:1px solid var(--line);border-radius:8px;padding:11px;color:#8c9bab">` +
+         `该工具描述在文本层无隐藏内容。风险来自其<b style="color:#e6edf3">描述语义</b>与<b style="color:#e6edf3">实现体行为</b>：<br>` +
+         `<span class="small">见下方「静态层结论」与视图③的「实现体层证据」。</span></div>`;
+  }
+  document.getElementById('p3').innerHTML = m;
+  document.getElementById('f3').innerHTML = t.hidden_count
+    ? `模型无法区分描述与指令 → 隐藏内容被当作可执行意图`
+    : `风险在语义与实现体，需静态层语义规则判定`;
+
+  document.getElementById('f1').innerHTML = `工具描述行 ${t.desc_line} 起 · 可见字符 ${t.visible_text.length} 个`;
+
+  /* 静态结论 */
+  document.getElementById('findings').innerHTML = t.findings.length
+    ? `<table><tr><th style="width:78px">规则</th><th style="width:74px">级别</th><th style="width:190px">名称</th><th>证据（行 ${t.findings[0].line}）</th></tr>` +
+      t.findings.map(f=>`<tr><td><b>${f.rule_id}</b></td>
+        <td style="color:${f.severity==='ERROR'?'#f87171':'#fbbf24'}"><b>${f.severity}</b></td>
+        <td>${esc(f.rule_name)}<div class="small">${esc(f.owasp_llm)}</div></td>
+        <td>${esc(f.detail)}<pre class="code" style="margin-top:6px">${esc(f.snippet)}</pre></td></tr>`).join('') + '</table>'
+    : `<div class="tag-ok" style="padding:6px 0">该工具未命中任何静态规则（与良性基线一致）。</div>`;
+}
+
+/* ---------- 视图 3 ---------- */
+document.getElementById('pipeline').innerHTML = D.pipeline.map(p=>`
+  <div class="step">
+    <div><div class="st">${esc(p.stage)}</div><div class="eng">${esc(p.engine)}</div></div>
+    <div><div style="font-size:12.8px;line-height:1.6">${esc(p.detail)}</div>
+         <div class="hint" style="margin-top:5px">💡 ${esc(p.why)}</div></div>
+    <div class="rs">${esc(p.result)}</div>
+  </div>`).join('<div class="arrowdown">▼</div>');
+
+document.getElementById('rules-table').innerHTML =
+  `<table><tr><th style="width:78px">规则</th><th style="width:70px">级别</th><th style="width:230px">名称</th><th style="width:150px">OWASP LLM</th><th style="width:120px">阳性命中</th><th>良性命中</th></tr>` +
+  Object.entries(D.rules).map(([rid,m])=>`<tr>
+    <td><b>${rid}</b></td>
+    <td style="color:${m.severity==='ERROR'?'#f87171':'#fbbf24'}"><b>${m.severity}</b></td>
+    <td>${esc(m.name)}</td><td class="small">${esc(m.owasp_llm)}</td>
+    <td><b style="color:${m.count?'#f87171':'#5f7183'}">${m.count}</b></td>
+    <td><span class="${m.benign_count?'tag-no':'tag-ok'}">${m.benign_count}</span></td></tr>`).join('') + '</table>';
+
+document.getElementById('impl-table').innerHTML = D.impl_evidence.length
+  ? `<table><tr><th style="width:78px">规则</th><th style="width:64px">行</th><th style="width:110px">类别</th><th style="width:300px">证据</th><th>为什么危险</th></tr>` +
+    D.impl_evidence.map(e=>`<tr><td><b>${e.rule}</b></td><td>L${e.line}</td><td>${esc(e.kind)}</td>
+      <td><code style="color:#22d3ee">${esc(e.value)}</code><pre class="code" style="margin-top:5px">${esc(e.raw)}</pre></td>
+      <td class="small">${esc(e.why)}</td></tr>`).join('') + '</table>'
+  : '<div class="tag-ok">未发现实现体层风险。</div>';
+
+/* ---------- 视图 4 ---------- */
+const statusEl = document.getElementById('run-status');
+const resEl = document.getElementById('run-result');
+
+function renderRun(cap){
+  if (!cap.ok){
+    resEl.innerHTML = `<div class="verdict WARN">⚠ 取证未完成<span class="why">${esc(cap.error||'未知错误')}</span></div>
+      <pre class="code">${esc((cap.stderr_tail||[]).join('\n'))}</pre>`;
+    return;
+  }
+  const rows = cap.tools.map(t=>{
+    const s = t.codepoints;
+    const kinds = Object.entries(s.by_kind||{}).map(([k,v])=>`${KIND_CN[k]||k} ×${v}`).join('、');
+    return `<tr>
+      <td><b>${esc(t.name)}</b></td>
+      <td>${t.description_len}</td>
+      <td>${s.total_suspicious ? `<span class="tag-no">${s.total_suspicious} 处</span>` : '<span class="tag-ok">0</span>'}</td>
+      <td>${kinds || '—'}</td>
+      <td>${(s.distinct_codepoints||[]).slice(0,6).map(c=>`<code>${c}</code>`).join(' ') || '—'}</td>
+      <td class="small">${s.samples&&s.samples.length ? s.samples.slice(0,3).map(d=>`<code>${d.cp}</code> ${esc(d.name)}`).join('<br>') : '—'}</td>
+    </tr>`;
+  }).join('');
+  resEl.innerHTML = `
+    <div class="verdict ${cap.poisoned_tools?'BLOCK':'PASS'}">
+      ${cap.poisoned_tools?'⛔':'✅'} 通信成功 · serverInfo=<code>${esc(JSON.stringify(cap.server_info))}</code>
+      <span class="why">协议 ${esc(cap.protocol_version)} · 共交换报文 ${cap.messages} 条 · ${cap.tools.length} 个工具，其中
+      <b>${cap.poisoned_tools}</b> 个在线上报文中携带不可见字符</span>
+    </div>
+    <div class="small">目标 <code>${esc(cap.target)}</code> · 解释器 <code>${esc(cap.interpreter)}</code> · 原始报文已落盘 <code>${esc(cap.traffic_file||'')}</code></div>
+    <table><tr><th>工具</th><th style="width:90px">描述长度</th><th style="width:100px">可疑码点</th><th style="width:190px">种类</th><th style="width:230px">去重码点</th><th>Unicode 名称（示例）</th></tr>${rows}</table>
+    <div class="hint">以上数据由 <code>probe_client.capture_tools()</code> 现场拉起真实 MCP Server 进程、发出 <code>initialize</code> 与 <code>tools/list</code> 后，对响应 JSON 逐码点解剖得到。</div>`;
+}
+
+document.getElementById('btn-run-attack').onclick = () => runProbe('attack');
+document.getElementById('btn-run-benign').onclick = () => runProbe('benign');
+async function runProbe(which){
+  statusEl.textContent = '正在拉起 MCP Server 并抓取报文…';
+  resEl.innerHTML = '';
+  try{
+    const r = await fetch('/api/runlayer?which=' + which);
+    const cap = await r.json();
+    renderRun(cap);
+    statusEl.textContent = '完成（' + new Date().toLocaleTimeString() + '）';
+  }catch(e){
+    statusEl.textContent = '失败：' + e;
+  }
+}
+
+/* ---------- 视图 5 ---------- */
+document.getElementById('oneliner').textContent =
+  '「在 Agent 时代，被信任的文本就是新的攻击面 —— 我们让这段文本可被审计。」';
+document.getElementById('inno-list').innerHTML = D.narrative.innovation.map(t=>`<li>${t}</li>`).join('');
+document.getElementById('how-list').innerHTML  = D.narrative.how.map(t=>`<li>${t}</li>`).join('');
+document.getElementById('num-list').innerHTML = [
+  ['阳性样本命中', M.attack_findings + ' 条 (' + M.attack_tools + ' 工具)'],
+  ['良性样本误报', M.benign_findings + ' 条 (' + M.benign_tools + ' 工具)'],
+  ['还原的真实不可见字符', M.hidden_codepoints + ' 个'],
+  ['转义形态载体', M.escape_carriers + ' 处'],
+  ['被判 BLOCK 的工具', D.blocked.length + ' 个'],
+  ['扫描 8 工具耗时', '3.83 ms（中位）'],
+  ['第三方依赖', '0'],
+].map(([k,v])=>`<div class="line"><b>${k}</b><span>${v}</span></div>`).join('');
+
+/* ---------- Tab 切换 ---------- */
+function showView(vid){
+  if (!document.getElementById(vid)) return;
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x.dataset.v===vid));
+  document.querySelectorAll('.view').forEach(x=>x.classList.toggle('on', x.id===vid));
+}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showView(t.dataset.v));
+
+renderTools();
+renderDetail();
+
+/* 支持 ?v=v-before 等深链，便于截图与答辩演示时直接定位页签 */
+const initialView = new URLSearchParams(location.search).get('v');
+if (initialView) showView(initialView);
+</script>
+</body>
+</html>

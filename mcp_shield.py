@@ -104,16 +104,22 @@ def _probe_stdout(argv: list[str]) -> int:
         print(f"[!] 取证失败: {snap.get('error')}", file=sys.stderr)
         return 2
     info = snap.get("server_info") or {}
+    tools = snap.get("tools") or []
+    # 注意: capture_tools 里的 poisoned_tools 是「数量」，不是列表；
+    # 逐工具的码点明细在 tools[].codepoints 里。
+    flagged = [t for t in tools if (t.get("codepoints") or {}).get("total_suspicious")]
     print("=" * 78)
     print(" MCP Shield · 运行层取证（不看源码，只看线上 JSON-RPC 报文）")
     print("=" * 78)
     print(f" serverInfo : {info}")
     print(f" 协议版本   : {snap.get('protocol_version')}")
-    print(f" 工具总数   : {len(snap.get('tools') or [])}")
-    print(f" 携带不可见字符的工具: {len(snap.get('poisoned_tools') or [])}")
-    for t in snap.get("poisoned_tools") or []:
-        kinds = ", ".join(f"{k}×{v}" for k, v in (t.get("by_kind") or {}).items())
-        print(f"   - {t.get('name'):<18} {t.get('suspicious_total')} 处  {kinds}")
+    print(f" 工具总数   : {len(tools)}")
+    print(f" 携带不可见字符的工具: {len(flagged)}")
+    for t in flagged:
+        cp = t.get("codepoints") or {}
+        kinds = ", ".join(f"{k}×{v}" for k, v in (cp.get("by_kind") or {}).items())
+        distinct = ", ".join(cp.get("distinct_codepoints") or [])
+        print(f"   - {t.get('name')}  {cp.get('total_suspicious')} 处  {kinds}  [{distinct}]")
     print("=" * 78)
     return 0
 

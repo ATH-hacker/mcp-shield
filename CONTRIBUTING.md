@@ -8,7 +8,7 @@
 - 不需要 `pip install` 任何东西即可运行核心功能
 
 ```bash
-git clone https://github.com/zjt-2007/mcp-shield
+git clone https://github.com/zjt20070101/mcp-shield
 cd mcp-shield
 python -m unittest discover -s tests -v      # 21 个用例应全绿
 python verify_release.py                     # 25 项自检应全通过

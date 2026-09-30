@@ -352,8 +352,10 @@ def render_console(findings: list[Finding], tools: list[dict], scanned: int) -> 
     for f in sorted(findings, key=lambda x: (x.file, x.line, x.rule_id)):
         if f.file != current:
             current = f.file
-            print(f"\n\033[96m{f}\033[0m")
-            print(f"  rules: {', '.join(RULES[f.rule_id]['name'] for f in findings if f.file == current)}")
+            file_findings = [x for x in findings if x.file == current]
+            hit_rules = sorted({x.rule_id for x in file_findings})
+            print(f"\n\033[96m{current}\033[0m")
+            print(f"  命中规则: {', '.join(hit_rules)}  （共 {len(file_findings)} 条告警）")
         print(f"\n  {f.line:>4} │ {icons.get(f.severity, f.severity)} "
               f"[{f.rule_id}] {f.rule_name}")
         print(f"       │ tool={f.tool}  attack={f.attack}  {f.owasp_llm}")
@@ -399,7 +401,7 @@ def render_sarif(findings: list[Finding], target: str) -> dict:
         "runs": [{
             "tool": {"driver": {
                 "name": "MCP-Shield",
-                "informationUri": "https://github.com/zjt-2007/mcp-shield",
+                "informationUri": "https://github.com/zjt20070101/mcp-shield",
                 "version": __version__,
                 "rules": rules_def,
             }},
