@@ -272,8 +272,38 @@ class TestUnscannableIsNotClean(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+def _has_mcp_sdk() -> bool:
+    """运行层测试要真的拉起样本 Server，而样本 Server 依赖 MCP 官方 SDK。
+
+    这个 SDK **不是扫描器的依赖** —— 它只是「被测对象」的依赖。所以：
+      * 扫描器相关用例必须在一台什么都没装的机器上全绿（证明零依赖）；
+      * 运行层用例在没装 SDK 时跳过，并由 CI 里单独的 probe 作业补齐覆盖。
+    跳过而不是静默通过，是为了不制造「我没测但看起来是绿的」的假象。
+    """
+    try:
+        import mcp  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 class TestProbeContract(unittest.TestCase):
-    """运行层取证的命令行契约。"""
+    """运行层取证的命令行参数契约（不需要 SDK，任何机器上都该跑）。"""
+
+    def test_probe_missing_server_exits_nonzero_without_traceback(self):
+        r = _run("mcp_shield.py", "probe", os.path.join(ROOT, "samples", "benign", "__nope__.py"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_tsjs_scanner_version_flag(self):
+        r = _run("tsjs_scanner.py", "--version")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(__version__, r.stdout + r.stderr)
+
+
+@unittest.skipUnless(_has_mcp_sdk(), "运行层用例需要 MCP SDK 才能拉起样本 Server（仅用于被测对象）")
+class TestProbeRunLayer(unittest.TestCase):
+    """真的把 Server 跑起来，验证报文落盘。"""
 
     def test_probe_out_writes_jsonl(self):
         import json as _json
@@ -296,16 +326,6 @@ class TestProbeContract(unittest.TestCase):
             out = os.path.join(d, "t.jsonl")
             r = _run("probe_client.py", BENIGN_PY, out)
             self.assertTrue(os.path.exists(out), r.stdout + r.stderr)
-
-    def test_probe_missing_server_exits_nonzero_without_traceback(self):
-        r = _run("mcp_shield.py", "probe", os.path.join(ROOT, "samples", "benign", "__nope__.py"))
-        self.assertNotEqual(r.returncode, 0)
-        self.assertNotIn("Traceback", r.stderr)
-
-    def test_tsjs_scanner_version_flag(self):
-        r = _run("tsjs_scanner.py", "--version")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn(__version__, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

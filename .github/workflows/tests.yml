@@ -59,7 +59,30 @@ jobs:
           sarif_file: reports/scan_attack.sarif
           category: mcp-shield
 
-  rule-syntax:
+  runlayer:
+    # 运行层取证要真的把一个 MCP Server 跑起来，而样本 Server 依赖官方 SDK。
+    # 这个 SDK 不是扫描器的依赖（它只是被测对象），所以单独一个作业来装它，
+    # 上面那个 test 作业继续在「什么都没装」的环境里跑 —— 两件事都不含糊。
+    name: 运行层取证（需要 MCP SDK）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安装 MCP 官方 SDK（仅用于被测的样本 Server）
+        run: pip install "mcp<2"
+      - name: 运行层用例（无 SDK 时会被跳过，这里必须真的执行）
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest tests.test_scanner.TestProbeRunLayer -v
+      - name: 端到端自检（33 项，含运行层）
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: python verify_release.py
+
     name: 规则文件语法自检
     runs-on: ubuntu-latest
     steps:
