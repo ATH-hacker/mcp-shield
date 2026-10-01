@@ -77,12 +77,13 @@ jobs:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: utf-8
         run: python -m unittest tests.test_scanner.TestProbeRunLayer -v
-      - name: 端到端自检（33 项，含运行层）
+      - name: 端到端自检（35 项，含运行层）
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: utf-8
         run: python verify_release.py
 
+  rule-syntax:
     name: 规则文件语法自检
     runs-on: ubuntu-latest
     steps:

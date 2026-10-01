@@ -23,6 +23,7 @@ verify_release.py —— 发布前的完整可运行性自检（离线、零第�
   9  性能：单文件扫描耗时（用于 README 里可复现的性能数字）
  10  Unicode TAG 载荷可逆还原
  11  样本集不含可路由的真实域名（防止误伤他人资产）
+ 12  CI 工作流结构（作业集合、无重复键、每个 step 形态正确）
 
 退出码：0 全部通过；1 有检查失败。
 
@@ -316,6 +317,73 @@ def check_no_live_domains() -> None:
     check("样本中的域名均为保留/不可路由域名", not bad, "; ".join(sorted(set(bad))))
 
 
+def check_ci_workflow() -> None:
+    """CI 工作流自己也是要发布的产物：结构坏掉时 GitHub 会直接 startup_failure。
+
+    GitHub 对「YAML 解析不了」的表现是**整个 run 失败、且一个 job 都没有**，
+    远比一次测试失败难查。本项目踩过一次真实的坑：往工作流里插入新作业时，
+    误删了下一个作业的名字行（`  rule-syntax:`），于是那个作业的
+    `name` / `runs-on` / `steps` 被并进了上一个作业，成了重复映射键 ——
+    GitHub 直接 0 job 失败。
+
+    这里**不引第三方 YAML 解析器**（核心模块必须零依赖），只做够用的结构检查：
+      1. `jobs:` 之下 2 空格缩进的键 = 作业名，集合必须与预期一致；
+      2. 每个作业内 4 空格缩进的键不能重复（重复键正是上面那个事故的形态）；
+      3. 每个 step 恰好带 `uses` 或 `run` 之一。
+    """
+    path = os.path.join(ROOT, ".github", "workflows", "tests.yml")
+    if not os.path.isfile(path):
+        check("CI 工作流文件存在", False, path)
+        return
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+
+    job_keys: dict[str, list[str]] = {}
+    job_steps: dict[str, list[set[str]]] = {}
+    job: str | None = None
+    in_jobs = False
+    for ln in lines:
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        indent = len(ln) - len(ln.lstrip(" "))
+        stripped = ln.strip()
+        m = re.match(r"([A-Za-z0-9_.-]+):", stripped)
+        # 必须先进入 jobs: 段再收集作业名 —— 否则 on: 段下的
+        # push / pull_request / workflow_dispatch 会被误当成作业名。
+        if indent == 0 and stripped.startswith("jobs:"):
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if indent == 2 and m and stripped.endswith(":"):
+            job = m.group(1)
+            job_keys[job] = []
+            job_steps[job] = []
+        elif indent == 4 and m and job:
+            job_keys[job].append(m.group(1))
+        elif indent == 6 and stripped.startswith("- ") and job:
+            job_steps[job].append(set())
+            mm = re.match(r"- ([A-Za-z0-9_.-]+):", stripped)
+            if mm:
+                job_steps[job][-1].add(mm.group(1))
+        elif indent == 8 and m and job and job_steps.get(job):
+            job_steps[job][-1].add(m.group(1))
+
+    expected = {"test", "runlayer", "rule-syntax"}
+    check("CI 作业集合符合预期", set(job_keys) == expected, f"实际 {sorted(job_keys)}")
+
+    problems: list[str] = []
+    for j, keys in job_keys.items():
+        dups = sorted({k for k in keys if keys.count(k) > 1})
+        if dups:
+            problems.append(f"{j} 内重复键 {dups}（会让整份工作流无法解析）")
+    for j, steps in job_steps.items():
+        for i, has in enumerate(steps):
+            if ("uses" in has) == ("run" in has):
+                problems.append(f"{j} 第 {i + 1} 个 step 必须恰好带 uses 或 run 之一，实际 {sorted(has)}")
+    check("每个 CI 作业无重复键、每个 step 形态正确", not problems, "; ".join(problems))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="MCP Shield 发布前完整自检")
     ap.add_argument("--verbose", action="store_true", help="打印每一项的详情")
@@ -338,6 +406,7 @@ def main() -> int:
     print("\n[6/6] 其他一致性")
     check_tag_reversible()
     check_no_live_domains()
+    check_ci_workflow()
 
     passed = sum(1 for ok, _, _ in _results if ok)
     total = len(_results)

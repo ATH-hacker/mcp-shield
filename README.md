@@ -290,7 +290,7 @@ python scripts/ui_server.py --open     # 顺便自动打开浏览器
 
 ```bash
 python -m unittest discover -s tests -v    # 30 个回归用例
-python verify_release.py                   # 33 项端到端自检
+python verify_release.py                   # 35 项端到端自检（其中 11 项属运行层，需装 MCP SDK）
 ```
 
 `verify_release.py` 会**真的执行命令、真的读输出**，包括：静态扫描的告警数、
@@ -306,7 +306,7 @@ pip install "mcp<2"     # 只有想跑运行层取证 / 样本 Server 时才需�
 ```
 
 CI 里也是这么分的：`test` 作业在**不装任何第三方包**的环境跑（用来证明零依赖），
-另有 `runlayer` 作业装上 SDK 专门跑运行层与 33 项自检。两边都不含糊。
+另有 `runlayer` 作业装上 SDK 专门跑运行层与 35 项自检。两边都不含糊。
 
 ---
 
@@ -462,7 +462,7 @@ mcp-shield/
 ├── probe_client.py            MCP stdio 客户端 + 流量取证（零依赖）
 ├── mcp_shield.py              统一 CLI：scan / probe / config
 ├── version.py                 版本号唯一来源
-├── verify_release.py          发布前 25 项端到端自检
+├── verify_release.py          发布前 35 项端到端自检
 ├── build_release.py           生成「可直接上传 GitHub」的发布包
 ├── rules/
 │   ├── mcp-python.yaml        semgrep 规则（Python，8 条）
@@ -470,7 +470,7 @@ mcp-shield/
 ├── samples/
 │   ├── attack/                恶意样本（检测靶标，不可路由域名）
 │   └── benign/                良性样本（误报基线）
-├── tests/test_scanner.py      21 个回归用例（unittest，零依赖）
+├── tests/test_scanner.py      30 个回归用例（unittest，零依赖）
 ├── scripts/
 │   ├── ui_server.py           本地可视化控制台
 │   └── build_standalone.py    生成离线单页版控制台
