@@ -16,9 +16,10 @@ verify_release.py —— 发布前的完整可运行性自检（离线、零第�
   3  Python 良性样本：0 告警
   4  TS/JS 阳性样本：8 工具且至少 12 告警
   5  TS/JS 良性样本：0 告警
-  6  退出码契约：阳性 1 / 阴性 0（CI 门禁依赖）
+  6  退出码契约：阳性 1 / 阴性 0 / **扫不动 2**（CI 门禁依赖）
   7  SARIF 2.1.0 结构完整（driver.version、partialFingerprints）
-  8  运行层取证：真的拉起 Server 抓 tools/list，与静态层命中同一批工具
+  8  运行层取证：真的拉起 Server 抓 tools/list，与静态层命中同一批工具；
+     并覆盖 probe CLI 的 --out 落盘、解释器规范化、报文信封结构
   9  性能：单文件扫描耗时（用于 README 里可复现的性能数字）
  10  Unicode TAG 载荷可逆还原
  11  样本集不含可路由的真实域名（防止误伤他人资产）
@@ -154,6 +155,15 @@ def check_samples(verbose: bool) -> None:
         r4 = run("tsjs_scanner.py", BENIGN_TS, "--quiet")
         check("TS/JS 良性样本 0 告警且退出码 0", r4.returncode == 0, f"实际 {r4.returncode}")
 
+        # 「扫不动」必须区别于「干净」—— 否则攻击者交个坏文件就能让 CI 绿着放过
+        bad = os.path.join(tmp, "broken.py")
+        with open(bad, "w", encoding="utf-8") as fh:
+            fh.write("def f(:\n    pass\n")
+        r6 = run("mcp_shield.py", "scan", bad, "--quiet")
+        check("不可解析的文件退出码为 2（不能当成干净）", r6.returncode == 2, f"实际 {r6.returncode}")
+        r7 = run("mcp_shield.py", "scan", os.path.join(tmp, "no_such_dir"), "--quiet")
+        check("目标不存在时退出码为 2", r7.returncode == 2, f"实际 {r7.returncode}")
+
         # 语言分派：统一 CLI 扫整个 samples 目录应同时覆盖两种语言
         r5 = run("mcp_shield.py", "scan", "samples", "--quiet")
         check("统一 CLI 扫 samples 目录整体退出码为 1", r5.returncode == 1, f"实际 {r5.returncode}")
@@ -226,6 +236,30 @@ def check_runlayer() -> None:
     check("良性 Server 运行层无命中",
           bool(snap2.get("ok")) and not (snap2.get("poisoned_tools") or 0),
           f"poisoned={snap2.get('poisoned_tools')}")
+
+    # 命令行入口：--out 必须真的落盘，且解释器要被换成绝对路径。
+    # 曾经 run_forensics 里留了一份「只替换 python/python3/py」的旧判断，
+    # 于是 `probe server.py --out x.jsonl` 会拿 .py 文件直接 CreateProcess：
+    #   OSError: [WinError 193] %1 不是有效的 Win32 应用程序
+    with tempfile.TemporaryDirectory() as tmp:
+        tpath = os.path.join(tmp, "cli.jsonl")
+        rp = run("mcp_shield.py", "probe", "--out", tpath, ATTACK_PY)
+        check("probe CLI 退出码为 0", rp.returncode == 0, f"实际 {rp.returncode}；{rp.stderr[-200:]}")
+        check("probe CLI --out 真的落盘", os.path.exists(tpath), f"未生成 {tpath}")
+        check("probe CLI 解释器被规范化成绝对路径",
+              os.path.abspath(PY).lower()[:14] in (rp.stdout + rp.stderr).lower(),
+              "报告头里的解释器不是 sys.executable")
+        if os.path.exists(tpath):
+            with open(tpath, encoding="utf-8") as fh:
+                recs = [json.loads(x) for x in fh if x.strip()]
+            check("probe CLI 落盘 5 条报文", len(recs) == 5, f"实际 {len(recs)}")
+            check("报文信封含 dir/seq/ts/msg",
+                  bool(recs) and all({"dir", "seq", "ts", "msg"} <= set(x) for x in recs))
+
+    # 独立入口的 --version（曾经缺 import __version__ 直接 NameError）
+    rv = run("tsjs_scanner.py", "--version")
+    check("tsjs_scanner.py --version 可用", rv.returncode == 0,
+          f"实际 {rv.returncode}；{rv.stderr[-160:]}")
 
 
 # ---------------------------------------------------------------------------

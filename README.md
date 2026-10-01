@@ -250,8 +250,16 @@ python mcp_shield.py scan ./my-mcp-server \
 python mcp_shield.py scan ./my-mcp-server --quiet
 ```
 
-**退出码约定**：命中任意 `ERROR` 级规则 → `1`；只有 `WARNING` 或完全干净 → `0`。
-所以它可以直接当门禁用。
+**退出码约定**（三档，CI 门禁依赖它）：
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 扫描完成，没有 `ERROR` 级告警 |
+| `1` | 扫描完成，存在 `ERROR` 级告警 |
+| `2` | **扫描没有完成** —— 目标不存在，或有文件读不了 / 解析不了 |
+
+第三档是刻意留的：**「扫不动」绝不能等于「干净」**。否则攻击者只要交一个语法坏掉
+的文件，流水线就会绿着把它放过去。退出码 `2` 会让 CI 直接红，逼人来看一眼。
 
 ### 2. 查一个闭源的第三方工具
 
@@ -281,8 +289,8 @@ python scripts/ui_server.py --open     # 顺便自动打开浏览器
 ### 4. 验证这套东西是真的（推荐第一次就做）
 
 ```bash
-python -m unittest discover -s tests -v    # 21 个回归用例
-python verify_release.py                   # 25 项端到端自检
+python -m unittest discover -s tests -v    # 30 个回归用例
+python verify_release.py                   # 33 项端到端自检
 ```
 
 `verify_release.py` 会**真的执行命令、真的读输出**，包括：静态扫描的告警数、

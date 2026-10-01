@@ -311,14 +311,30 @@ class MCPServerScanner(ast.NodeVisitor):
         ))
 
 
-def scan_file(path: str) -> tuple[list[Finding], list[dict]]:
-    with open(path, "r", encoding="utf-8") as f:
-        source = f.read()
+def scan_file(path: str, errors: list[str] | None = None) -> tuple[list[Finding], list[dict]]:
+    """扫描单个 Python 文件。
+
+    errors: 可选的收集列表。传入时，任何「扫不了」的原因都会记进去。
+    为什么需要它：一个扫不动的文件**绝不能被当成干净文件**——否则攻击者只要
+    交一个语法坏掉的文件，CI 就会绿着放过它。调用方据此把退出码区分开。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            source = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        msg = f"无法读取 {path}: {e}"
+        print(f"[!] {msg}", file=sys.stderr)
+        if errors is not None:
+            errors.append(msg)
+        return [], []
     scanner = MCPServerScanner(path, source)
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
-        print(f"[!] 语法解析失败 {path}: {e}", file=sys.stderr)
+        msg = f"语法解析失败 {path}: {e}"
+        print(f"[!] {msg}", file=sys.stderr)
+        if errors is not None:
+            errors.append(msg)
         return [], []
     scanner.visit(tree)
     return scanner.findings, scanner.tools
@@ -336,12 +352,15 @@ def iter_targets(root: str) -> list[str]:
     return sorted(out)
 
 
-def render_console(findings: list[Finding], tools: list[dict], scanned: int) -> None:
+def render_console(findings: list[Finding], tools: list[dict], scanned: int,
+                   failed: int = 0) -> None:
     icons = {"ERROR": "\033[91mERROR\033[0m", "WARNING": "\033[93mWARN \033[0m"}
     print("=" * 78)
     print(" MCP Shield · 静态扫描报告 (无依赖兜底扫描器)")
     print("=" * 78)
     print(f" 扫描文件: {scanned}    发现工具: {len(tools)}    告警总数: {len(findings)}")
+    if failed:
+        print(f"\033[91m 解析失败: {failed} 个文件 —— 这些文件的内容【未被检查】，不计入以上结论\033[0m")
     if findings:
         by_rule: dict[str, int] = {}
         for f in findings:
@@ -421,15 +440,23 @@ def main() -> int:
     args = ap.parse_args()
 
     targets = iter_targets(args.target)
+    if not targets:
+        print(f"[!] 目标下没有可扫描的文件: {args.target}", file=sys.stderr)
+        return 2
     all_findings: list[Finding] = []
     all_tools: list[dict] = []
+    errors: list[str] = []
     for t in targets:
-        fs, ts = scan_file(t)
+        fs, ts = scan_file(t, errors)
         all_findings.extend(fs)
         all_tools.extend(ts)
 
     if not args.quiet:
-        render_console(all_findings, all_tools, len(targets))
+        render_console(all_findings, all_tools, len(targets), failed=len(errors))
+        if errors:
+            print("\n 以下文件未能解析，其内容未被检查：")
+            for e in errors:
+                print(f"   ! {e}")
 
     if args.json_out:
         payload = {
@@ -458,6 +485,12 @@ def main() -> int:
         if not args.quiet:
             print(f"[+] SARIF 报告已写入: {args.sarif_out}")
 
+    # 退出码契约（README 与 tests 都依赖它）：
+    #   0 = 扫描完成，无 ERROR 级告警
+    #   1 = 扫描完成，存在 ERROR 级告警
+    #   2 = 扫描未能完成（文件读不了 / 解析不了）—— 绝不能被当成「干净」
+    if errors:
+        return 2
     return 1 if any(f.severity == "ERROR" for f in all_findings) else 0
 
 

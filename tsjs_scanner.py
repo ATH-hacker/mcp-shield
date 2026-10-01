@@ -50,6 +50,7 @@ from scanner import (  # 复用同一套告警码、Finding 结构与渲染器�
     render_console,
     render_sarif,
 )
+from version import __version__
 
 TS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 
@@ -309,9 +310,20 @@ def is_tsjs(path: str) -> bool:
     return path.lower().endswith(TS_EXT)
 
 
-def scan_tsjs_file(path: str) -> tuple[list[Finding], list[dict]]:
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        source = f.read()
+def scan_tsjs_file(path: str, errors: list[str] | None = None) -> tuple[list[Finding], list[dict]]:
+    """扫描单个 TS/JS 文件。
+
+    errors 传入时，读不了的文件会被记进去——「扫不动」不等于「干净」。
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            source = f.read()
+    except OSError as e:
+        msg = f"无法读取 {path}: {e}"
+        print(f"[!] {msg}", file=sys.stderr)
+        if errors is not None:
+            errors.append(msg)
+        return [], []
     sc = TSJSScanner(path, source)
     sc.run()
     return sc.findings, sc.tools
@@ -323,18 +335,23 @@ def main() -> int:
     ap.add_argument("--json", dest="json_out", help="输出 JSON 报告")
     ap.add_argument("--sarif", dest="sarif_out", help="输出 SARIF 报告")
     ap.add_argument("--quiet", action="store_true", help="仅输出 JSON/SARIF，不打印控制台报告")
+    ap.add_argument("--version", action="version", version=f"MCP-Shield {__version__}")
     args = ap.parse_args()
 
     targets = [t for t in iter_targets(args.target) if is_tsjs(t)]
+    if not targets:
+        print(f"[!] 目标下没有 TS/JS 文件: {args.target}", file=sys.stderr)
+        return 2
     findings: list[Finding] = []
     tools: list[dict] = []
+    errors: list[str] = []
     for t in targets:
-        f, tl = scan_tsjs_file(t)
+        f, tl = scan_tsjs_file(t, errors)
         findings.extend(f)
         tools.extend(tl)
 
     if not args.quiet:
-        render_console(findings, tools, len(targets))
+        render_console(findings, tools, len(targets), failed=len(errors))
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:
             json.dump({

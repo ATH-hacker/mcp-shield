@@ -297,14 +297,26 @@ def run_forensics(server_argv: list[str], out_path: str) -> int:
     print(f" 流量落盘    : {out_path}")
     print("-" * 78)
 
-    if shutil.which(server_argv[0]) is None and not os.path.isabs(server_argv[0]):
-        print(f"[!] 找不到解释器 {server_argv[0]!r}，请检查 PATH")
+    # 关键：这里必须走 _pin_interpreter，不能自己重写一遍判断。
+    # 曾经在这里保留了一份「只替换 python/python3/py」的旧逻辑，而 _pin_interpreter
+    # 后来补上了「裸 .py 脚本自动补解释器」的分支 —— 于是 `probe server.py --out x.jsonl`
+    # 会拿 .py 文件直接去 CreateProcess，崩在 cli.start()：
+    #   OSError: [WinError 193] %1 不是有效的 Win32 应用程序
+    # 教训：同一件事只能有一处实现。
+    argv = _pin_interpreter(server_argv)
+
+    exe = argv[0]
+    if os.path.isabs(exe):
+        if not os.path.exists(exe):
+            print(f"[!] 解释器不存在: {exe}")
+            return 2
+    elif shutil.which(exe) is None:
+        print(f"[!] 找不到可执行文件 {exe!r}，请检查 PATH")
+        return 2
+    if len(argv) >= 2 and os.path.isabs(argv[1]) and not os.path.exists(argv[1]):
+        print(f"[!] Server 脚本不存在: {argv[1]}")
         return 2
 
-    # 关键：用绝对路径替换 python 占位符，避免子进程落到另一个解释器上
-    argv = list(server_argv)
-    if os.path.basename(argv[0]).lower() in ("python", "python3", "py"):
-        argv[0] = sys.executable
     print(f" 解释器      : {argv[0]}")
 
     cli = MCPStdioClient(argv, out_path)
@@ -367,17 +379,32 @@ def run_forensics(server_argv: list[str], out_path: str) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="MCP stdio 客户端与流量取证")
-    ap.add_argument("--out", default="reports/traffic.jsonl", help="流量 JSONL 输出路径")
+    ap = argparse.ArgumentParser(
+        description="MCP stdio 客户端与流量取证",
+        epilog="注意：因为 server 用了 REMAINDER，--out 必须写在 Server 命令【之前】。"
+               "写成 `--out x.jsonl -- python server.py`，或让末位参数以 .jsonl 结尾。",
+    )
+    ap.add_argument("--out", default=None,
+                    help="流量 JSONL 输出路径（不写则默认 reports/traffic.jsonl）")
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("server", nargs=argparse.REMAINDER, help="-- 之后的 MCP Server 启动命令")
     args = ap.parse_args()
 
     argv = [a for a in args.server if a != "--"]
+
+    out = args.out
+    # 兜底：REMAINDER 会把写在 Server 后面的 --out 也吞进 server 列表，
+    # 用户于是看到「明明指定了路径却没落盘」。这里把末位的 .jsonl 参数捡回来。
+    if out is None and len(argv) >= 2 and argv[-1].lower().endswith(".jsonl"):
+        out = argv.pop()
+    if out is None:
+        out = os.path.join("reports", "traffic.jsonl")
+        print(f"[i] 未指定 --out，默认写入 {out}（--out 要写在 Server 命令之前）")
+
     if not argv:
         print("用法: python probe_client.py --out reports/traffic.jsonl -- python server.py")
         return 2
-    return run_forensics(argv, args.out)
+    return run_forensics(argv, out)
 
 
 if __name__ == "__main__":

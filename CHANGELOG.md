@@ -27,12 +27,34 @@
 - **semgrep 规则集** `rules/mcp-python.yaml`（8 条）、`rules/mcp-typescript.yaml`（7 条），
   与本实现语义一一对应。
 - **恶意/良性样本集** `samples/` —— 8 个恶意工具 + 4 个良性工具，Python 与 TS 双语各一套。
-- **测试** `tests/test_scanner.py` —— 21 个 unittest 用例，含「零第三方依赖」的
-  AST 静态断言与 CLI 契约断言。
-- **发布前自检** `verify_release.py` —— 25 项端到端检查，重新计算所有对外声明的数字。
+- **测试** `tests/test_scanner.py` —— 30 个 unittest 用例，含「零第三方依赖」的
+  AST 静态断言、CLI 契约断言，以及「扫不动 ≠ 干净」的退出码断言。
+- **发布前自检** `verify_release.py` —— 33 项端到端检查，重新计算所有对外声明的数字。
 - **本地可视化控制台** `scripts/ui_server.py` + `ui/console.html` ——
   三栏对照「人眼所见 / 线上报文 / 模型读到的东西」，含五页签与运行层取证实录。
 - **CI** `.github/workflows/tests.yml` —— Linux + Windows，Python 3.10/3.11/3.12 矩阵。
+
+### 修复
+
+发布前做了一轮「专挑没跑过的路径」的破坏性自检，抓到并修掉 4 个真实缺陷：
+
+- **`probe --out` 直接崩溃**（`OSError: [WinError 193] %1 不是有效的 Win32 应用程序`）。
+  根因：`run_forensics()` 里保留了一份「只替换 `python`/`python3`/`py`」的旧判断，
+  而 `_pin_interpreter()` 后来补上了「裸 `.py` 脚本自动补解释器」的分支 ——
+  于是 `probe samples/attack/venomous_server.py --out x.jsonl` 会拿 `.py` 文件
+  直接去 `CreateProcess`。修法：统一走 `_pin_interpreter()`。
+  教训：同一件事只能有一处实现。
+- **`probe_client.py --out` 写在 Server 命令之后会被静默吞掉**（`nargs=REMAINDER`
+  把后续所有参数都收进 `server` 列表），用户看到「明明指定了路径却没落盘」。
+  修法：`--out` 默认改为 `None`，并兜底捡回末位以 `.jsonl` 结尾的参数，
+  同时在未指定时明确打印默认落盘路径。
+- **「扫不动」被当成「干净」**：语法解析失败的文件只往 stderr 打个提示就返回退出码
+  `0`，攻击者只要交一个解析不了的文件，CI 就会绿着放过它。修法：新增退出码 `2`
+  （扫描未完成），报告头显式打印 `解析失败: N 个文件 —— 这些文件的内容【未被检查】`。
+  目标不存在、语言过滤后无目标同样返回 `2`。
+- **`tsjs_scanner.py --version` 触发 `NameError`**：用到了 `__version__` 却没 import。
+
+同时清掉了 `tests/` 里 3 处未关闭文件的 `ResourceWarning`（改为 `with open(...)`）。
 
 ### 实测结果
 

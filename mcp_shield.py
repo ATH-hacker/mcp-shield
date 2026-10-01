@@ -39,23 +39,31 @@ def _cmd_scan(args) -> int:
         targets = [t for t in targets if t.endswith(".py")]
     elif args.lang in ("ts", "js"):
         targets = [t for t in targets if tsjs_scanner.is_tsjs(t)]
+    if not targets:
+        print(f"[!] 目标下没有可扫描的文件: {args.target}", file=sys.stderr)
+        return 2
 
     findings: list[Finding] = []
     tools: list[dict] = []
+    errors: list[str] = []
     for t in targets:
         if tsjs_scanner.is_tsjs(t):
             f, tl = tsjs_scanner.scan_tsjs_file(t)
         else:
-            f, tl = scanner.scan_file(t)
+            f, tl = scanner.scan_file(t, errors)
         findings.extend(f)
         tools.extend(tl)
 
     if not args.quiet:
-        render_console(findings, tools, len(targets))
+        render_console(findings, tools, len(targets), failed=len(errors))
         by_engine = {"python-ast": 0, "tsjs-text": 0}
         for t in targets:
             by_engine["tsjs-text" if tsjs_scanner.is_tsjs(t) else "python-ast"] += 1
         print(f" 扫描引擎分布: " + "  ".join(f"{k}×{v} 文件" for k, v in by_engine.items() if v))
+        if errors:
+            print("\n 以下文件未能解析，其内容未被检查：")
+            for e in errors:
+                print(f"   ! {e}")
 
     if args.json:
         payload = {
@@ -84,6 +92,9 @@ def _cmd_scan(args) -> int:
         if not args.quiet:
             print(f"[+] SARIF 报告已写入: {args.sarif}")
 
+    # 退出码契约：0 = 干净；1 = 有 ERROR 级告警；2 = 有文件没扫成（不能当成干净）
+    if errors:
+        return 2
     return 1 if any(f.severity == "ERROR" for f in findings) else 0
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -154,7 +155,8 @@ class TestZeroDependency(unittest.TestCase):
     SELF = {"scanner", "tsjs_scanner", "probe_client", "version", "mcp_shield"}
 
     def _imports(self, path: str) -> set[str]:
-        tree = ast.parse(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
         found: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -202,7 +204,8 @@ class TestCliContract(unittest.TestCase):
             out = os.path.join(d, "s.sarif")
             r = _run("scanner.py", ATTACK_PY, "--sarif", out, "--quiet")
             self.assertIn(r.returncode, (0, 1))
-            data = json.load(open(out, encoding="utf-8"))
+            with open(out, encoding="utf-8") as fh:
+                data = json.load(fh)
             self.assertEqual(data["version"], "2.1.0")
             run = data["runs"][0]
             self.assertEqual(run["tool"]["driver"]["version"], __version__)
@@ -216,6 +219,93 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         for rid in scanner.RULES:
             self.assertIn(rid, r.stdout)
+
+
+class TestUnscannableIsNotClean(unittest.TestCase):
+    """「扫不动」绝不能等于「干净」。
+
+    这是一个真实修过的漏洞：早期版本遇到语法错误的文件只往 stderr 打个提示，
+    然后照常返回 0 —— 攻击者只要交一个解析不了的文件，CI 就会绿着放过它。
+    现在契约是退出码 2（扫描未完成），下面几条用例把它钉死。
+    """
+
+    def test_syntax_error_exits_2(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            bad = os.path.join(d, "broken.py")
+            with open(bad, "w", encoding="utf-8") as fh:
+                fh.write("def f(:\n    pass\n")
+            r = _run("mcp_shield.py", "scan", bad)
+            self.assertEqual(r.returncode, 2, "解析失败必须退出码 2，不能是 0")
+            self.assertIn("解析失败", r.stdout + r.stderr)
+
+    def test_syntax_error_exits_2_even_when_quiet(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            bad = os.path.join(d, "broken.py")
+            with open(bad, "w", encoding="utf-8") as fh:
+                fh.write("def f(:\n    pass\n")
+            r = _run("mcp_shield.py", "scan", bad, "--quiet")
+            self.assertEqual(r.returncode, 2)
+
+    def test_broken_file_does_not_mask_real_findings_in_same_dir(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy2(ATTACK_PY, os.path.join(d, "attack.py"))
+            with open(os.path.join(d, "broken.py"), "w", encoding="utf-8") as fh:
+                fh.write("def f(:\n")
+            r = _run("mcp_shield.py", "scan", d)
+            self.assertEqual(r.returncode, 2, "同目录有坏文件时，整体结论必须是「未完成」")
+            self.assertIn("解析失败: 1", r.stdout)
+            self.assertIn("告警总数: 17", r.stdout, "好文件里的告警仍要照常报出来")
+
+    def test_empty_language_filter_exits_2(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ts = os.path.join(d, "s.ts")
+            shutil.copy2(ATTACK_TS, ts)
+            r = _run("mcp_shield.py", "scan", d, "--lang", "python")
+            self.assertEqual(r.returncode, 2, "过滤后一个目标都没有，必须报「未完成」而不是 0")
+
+    def test_missing_target_exits_2(self):
+        r = _run("mcp_shield.py", "scan", os.path.join(ROOT, "no_such_dir_xyz"))
+        self.assertEqual(r.returncode, 2)
+
+
+class TestProbeContract(unittest.TestCase):
+    """运行层取证的命令行契约。"""
+
+    def test_probe_out_writes_jsonl(self):
+        import json as _json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "traffic.jsonl")
+            r = _run("mcp_shield.py", "probe", "--out", out, ATTACK_PY)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertTrue(os.path.exists(out), "--out 指定了路径就必须落盘")
+            with open(out, encoding="utf-8") as fh:
+                recs = [_json.loads(x) for x in fh if x.strip()]
+            self.assertEqual(len(recs), 5, "initialize + initialized + tools/list 共 5 条报文")
+            self.assertEqual({x["dir"] for x in recs}, {"send", "recv"})
+            self.assertTrue(all({"dir", "seq", "ts", "msg"} <= set(x) for x in recs))
+
+    def test_probe_out_after_server_is_recovered(self):
+        """REMAINDER 会把写在 Server 后面的 --out 吞掉，客户端要能捡回来。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "t.jsonl")
+            r = _run("probe_client.py", BENIGN_PY, out)
+            self.assertTrue(os.path.exists(out), r.stdout + r.stderr)
+
+    def test_probe_missing_server_exits_nonzero_without_traceback(self):
+        r = _run("mcp_shield.py", "probe", os.path.join(ROOT, "samples", "benign", "__nope__.py"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_tsjs_scanner_version_flag(self):
+        r = _run("tsjs_scanner.py", "--version")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(__version__, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":
