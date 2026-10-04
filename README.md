@@ -21,7 +21,7 @@
 ## 目录
 
 - [它解决什么问题](#它解决什么问题)
-- [实际效果：四组真实运行实例](#实际效果四组真实运行实例)
+- [实际效果：五组真实运行实例](#实际效果五组真实运行实例)
 - [下载与安装](#下载与安装)
 - [使用教程](#使用教程)
 - [接进 CI 当门禁](#接进-ci-当门禁)
@@ -58,7 +58,7 @@ MCP Shield 就是针对这条链路的检测与拦截工具。
 
 ---
 
-## 实际效果：四组真实运行实例
+## 实际效果：五组真实运行实例
 
 > 下面每一个字都是**真实终端输出**。你 clone 下来照抄命令就能得到一样的结果 ——
 > 这也是本项目唯一想证明的事：**它真的能用**。
@@ -196,7 +196,12 @@ $ python mcp_shield.py probe samples/attack/venomous_server.py
 的，是同一批。这是本项目最有说服力的一处交叉验证。
 
 > `probe` 的退出码固定为 `0`：它的职责是**取证**（把证据落盘），不是判案。
-> 判案在静态层与策略层。
+> 判案在静态层与**策略层**。策略层指 `scanner.policy_verdicts()`：它把告警按
+> 「工具」聚合成 `BLOCK` / `WARN` / `PASS` 三级处置建议，同时写进控制台报告的
+> 「策略裁决」块、JSON 的 `policy` 段、以及 SARIF 每条 result 的
+> `properties.mcpShieldVerdict`。**这是静态分析给出的处置建议，不是运行时拦截** ——
+> MCP Shield 不在 Agent 的调用路径上，由集成方决定把它接到 CI 门禁、MCP 客户端
+> 加载前的准入检查，还是 SIEM 工单流。
 
 ---
 
@@ -211,7 +216,10 @@ python mcp_shield.py config      # 能打出 8 条规则就说明环境 OK
 ```
 
 **要求**：Python 3.10 或更高（用到了 `X | Y` 类型标注与 `sys.stdlib_module_names`）。
-Windows / Linux / macOS 都行，CI 里跑的是 ubuntu-latest + windows-latest × Python 3.10/3.11/3.12。
+Windows / Linux / macOS 都行。CI 里有三个作业：
+`test`（ubuntu-latest + windows-latest × Python 3.10/3.11/3.12 矩阵，**不装任何第三方包**）、
+`runlayer`（装上 `mcp<2`，专跑运行层取证与 44 项自检）、
+`rule-syntax`（用 semgrep 校验 `rules/mcp-python.yaml` 能加载并在阳性样本上命中）。
 
 唯一需要额外装的，是**跑样本 Server 时**要用 MCP 官方 Python SDK
 （它只是被测对象，不是本工具的依赖）：
@@ -283,14 +291,26 @@ python scripts/ui_server.py            # 默认 http://127.0.0.1:8787
 python scripts/ui_server.py --open     # 顺便自动打开浏览器
 ```
 
-控制台是零依赖的（`http.server` + 一个自包含 HTML 页面），点「运行层取证」
+控制台**本体零依赖**（`http.server` + 一个自包含 HTML 页面），点「运行层取证」
 按钮会现场拉起样本 Server 抓报文 —— 不需要预先准备任何数据。
+另外 `scripts/build_standalone.py` 能把快照烤进单页，产出**离线版** HTML，
+没有后端也能演示三栏对照。只有 `scripts/shoot.js` 这个自动截图脚本用到
+`playwright-core`，它不参与任何检测逻辑。
+
+效果长这样（**真实截图，不是示意图**）。左边是人眼看到的，中间是线上报文里真正
+传过去的 46 个不可见字符，右边是模型实际读到的那句话：
+
+![MCP Shield 控制台：同一句话的三个世界](assets/console-three-worlds.png)
+
+运行层取证实录页 —— **不读源码，只看 JSON-RPC 报文**，8 个工具里 3 个携带不可见字符：
+
+![MCP Shield 控制台：运行层取证实录](assets/console-run-capture.png)
 
 ### 4. 验证这套东西是真的（推荐第一次就做）
 
 ```bash
-python -m unittest discover -s tests -v    # 30 个回归用例
-python verify_release.py                   # 35 项端到端自检（其中 11 项属运行层，需装 MCP SDK）
+python -m unittest discover -s tests -v    # 41 个回归用例
+python verify_release.py                   # 44 项端到端自检（其中 11 项属运行层，需装 MCP SDK）
 ```
 
 `verify_release.py` 会**真的执行命令、真的读输出**，包括：静态扫描的告警数、
@@ -306,7 +326,7 @@ pip install "mcp<2"     # 只有想跑运行层取证 / 样本 Server 时才需�
 ```
 
 CI 里也是这么分的：`test` 作业在**不装任何第三方包**的环境跑（用来证明零依赖），
-另有 `runlayer` 作业装上 SDK 专门跑运行层与 35 项自检。两边都不含糊。
+另有 `runlayer` 作业装上 SDK 专门跑运行层与 44 项自检。两边都不含糊。
 
 ---
 
@@ -404,7 +424,14 @@ Python 侧走 AST（精确关联「工具名 → 描述 → 实现体」）；TS
 
 ## 实测数据
 
-以下数字全部由 `python verify_release.py` 在每次运行时重新计算，不是手写死的。
+**口径说明**（避免把两类数字混为一谈）：
+
+- **工具数、告警数、ERROR/WARNING 分布、退出码、SARIF 结构**，由 `python verify_release.py`
+  在每次运行时**真的执行命令、真的读输出**重新算一遍 —— 这几个数字写错了自检就会红。
+- **耗时**是**一次性实测快照**（Windows 11 / Python 3.11.9 / 本机 SSD），
+  随机器与后台负载浮动；`verify_release.py` 只做一条宽松的范围断言（< 200 ms），
+  所以下表给的是**区间**而不是精确值。要看你自己的数，请跑
+  `python measure_memory.py`（它同时给出进程峰值内存）。
 
 | 指标 | Python 恶意样本 | Python 良性样本 |
 |------|---------|---------|
@@ -412,7 +439,8 @@ Python 侧走 AST（精确关联「工具名 → 描述 → 实现体」）；TS
 | 告警总数 | **17** | **0** |
 | ERROR / WARNING | 11 / 6 | 0 / 0 |
 | 命中规则 | 8 / 8 全部命中 | —— |
-| 单文件扫描中位耗时 | ~3 ms | ~1.4 ms |
+| 单文件扫描耗时（多次取样中位） | 约 3–4 ms | 约 1–1.4 ms |
+| 进程峰值内存 | 19.9 MB | 19.9 MB |
 
 TS/JS 侧：恶意样本 8 工具 / **14 条告警**，良性样本 4 工具 / **0 条告警**。
 
@@ -432,7 +460,11 @@ TS/JS 侧：恶意样本 8 工具 / **14 条告警**，良性样本 4 工具 / *
 
 **③ 静态 ↔ 运行双证据链.** 两条独立链路指向同一批工具（实测：8 个工具中同样那 3 个）。
 
-**④ 策略化裁决.** 按规则级别给出 BLOCK / WARN / PASS，而不是只报一个数字。
+**④ 策略化裁决.** 不止报一个数字：把告警按「工具」聚合成 `BLOCK` / `WARN` / `PASS`,
+同时写进控制台、JSON 的 `policy` 段与 SARIF 的 `properties.mcpShieldVerdict`,
+并可用 `--block-on` / `--warn-on` 自定义（例如只把「描述走私 TAG」列为硬阻断）。
+一条底线：**只要命中过任何规则，最低也是 `WARN`** —— `PASS` 严格表示「没命中任何规则」,
+绝不用来表示「我们没看懂」。它给的是**处置建议，不是运行时拦截**。
 
 **⑤ 零依赖 + 标准 SARIF.** 任何装了 Python 3.10+ 的机器都能现场复现，
 有测试用例在 CI 里强制校验这一点。
@@ -462,7 +494,8 @@ mcp-shield/
 ├── probe_client.py            MCP stdio 客户端 + 流量取证（零依赖）
 ├── mcp_shield.py              统一 CLI：scan / probe / config
 ├── version.py                 版本号唯一来源
-├── verify_release.py          发布前 35 项端到端自检
+├── measure_memory.py          进程峰值内存测量（读 OS 记账，非采样）
+├── verify_release.py          发布前 44 项端到端自检
 ├── build_release.py           生成「可直接上传 GitHub」的发布包
 ├── rules/
 │   ├── mcp-python.yaml        semgrep 规则（Python，8 条）
@@ -470,15 +503,17 @@ mcp-shield/
 ├── samples/
 │   ├── attack/                恶意样本（检测靶标，不可路由域名）
 │   └── benign/                良性样本（误报基线）
-├── tests/test_scanner.py      30 个回归用例（unittest，零依赖）
+├── tests/test_scanner.py      41 个回归用例（unittest，零依赖）
 ├── scripts/
 │   ├── ui_server.py           本地可视化控制台
 │   └── build_standalone.py    生成离线单页版控制台
 ├── ui/console.html            控制台前端（自包含单页）
+├── assets/                    README 与材料用的真实截图
 ├── .github/workflows/tests.yml
 ├── mcp-shield.toml.example    配置示例
+├── CONTRIBUTING.md            贡献指南（含「不要做什么」的硬性约定）
 ├── SECURITY.md                安全政策与已知能力边界
-└── CHANGELOG.md
+└── CHANGELOG.md               版本变更记录
 ```
 
 ---
@@ -505,6 +540,23 @@ mcp-shield/
 4. 样本集规模有限，不做统计意义声明。
 
 详见 [SECURITY.md](SECURITY.md)。
+
+---
+
+## 贡献
+
+最欢迎的贡献是**绕过样本**：如果你能用一条本工具没抓到的载荷构造出一个投毒工具，
+那是比任何赞美都有用的反馈 —— 请带上最小复现样本开 Issue，标题加 `[detection-gap]` 前缀。
+
+其它约定（完整版见 [CONTRIBUTING.md](CONTRIBUTING.md)）：
+
+- 核心模块（`scanner.py` / `tsjs_scanner.py` / `probe_client.py`）**必须保持零第三方依赖**，
+  有 AST 断言在测试里守着；
+- 新增一条规则要**两套实现都加**，否则两端口径会漂移；
+- 改了对外声明的数字，**必须同时改测试与 `verify_release.py`**，不许只改文档；
+- 样本里一律用 `example` / `invalid` 保留域名，凭据样串必须带占位前缀。
+
+行为准则、安全政策与漏洞报告渠道见 [SECURITY.md](SECURITY.md)。
 
 ---
 

@@ -10,8 +10,8 @@
 ```bash
 git clone https://github.com/ATH-hacker/mcp-shield
 cd mcp-shield
-python -m unittest discover -s tests -v      # 30 个用例应全绿（缺 MCP SDK 时 skip 2 个运行层用例）
-python verify_release.py                     # 35 项自检应全通过
+python -m unittest discover -s tests -v      # 41 个用例应全绿（缺 MCP SDK 时 skip 2 个运行层用例）
+python verify_release.py                     # 44 项自检应全通过
 ```
 
 ## 硬性约定

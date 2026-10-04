@@ -17,13 +17,15 @@ verify_release.py —— 发布前的完整可运行性自检（离线、零第�
   4  TS/JS 阳性样本：8 工具且至少 12 告警
   5  TS/JS 良性样本：0 告警
   6  退出码契约：阳性 1 / 阴性 0 / **扫不动 2**（CI 门禁依赖）
-  7  SARIF 2.1.0 结构完整（driver.version、partialFingerprints）
+  7  SARIF 2.1.0 结构完整（driver.version、partialFingerprints、mcpShieldVerdict）
   8  运行层取证：真的拉起 Server 抓 tools/list，与静态层命中同一批工具；
      并覆盖 probe CLI 的 --out 落盘、解释器规范化、报文信封结构
   9  性能：单文件扫描耗时（用于 README 里可复现的性能数字）
  10  Unicode TAG 载荷可逆还原
  11  样本集不含可路由的真实域名（防止误伤他人资产）
  12  CI 工作流结构（作业集合、无重复键、每个 step 形态正确）
+ 13  策略裁决层：BLOCK/WARN/PASS 真的算出来并同时写进控制台、JSON、SARIF，
+     且 --block-on 收窄后不把「有告警」的工具误判为 PASS
 
 退出码：0 全部通过；1 有检查失败。
 
@@ -196,6 +198,84 @@ def check_sarif() -> None:
               all("partialFingerprints" in x for x in results) and bool(results),
               "有结果缺少指纹")
         check("SARIF 结果数量与告警数一致", len(results) == 17, f"实际 {len(results)}")
+        check("SARIF 每条结果带 mcpShieldVerdict 裁决",
+              all(x.get("properties", {}).get("mcpShieldVerdict") in ("BLOCK", "WARN", "PASS")
+                  for x in results) and bool(results),
+              "有结果缺少策略裁决字段")
+
+
+# ---------------------------------------------------------------------------
+# 7.5 策略裁决层
+# ---------------------------------------------------------------------------
+def check_policy() -> None:
+    """三级裁决必须是真算出来的，而且必须写进控制台 / JSON / SARIF 三处。
+
+    这一路自检的存在本身就是一次修复的记录：v0.1.0 的文档把 BLOCK / WARN / PASS
+    写成「系统的裁决层」，但代码里只有 Web 控制台展示层有这个词。
+    凡是文档对外声称的能力，自检里就必须有一条断言能把它证伪。
+    """
+    sys.path.insert(0, ROOT)
+    try:
+        import scanner
+    except Exception as e:                                  # noqa: BLE001
+        check("策略层模块可导入", False, str(e))
+        return
+
+    findings, tools = scanner.scan_file(ATTACK_PY)
+    b_findings, b_tools = scanner.scan_file(BENIGN_PY)
+
+    v = scanner.policy_verdicts(tools, findings)
+    check("恶意样本 8 个工具全部判 BLOCK",
+          len(v) == 8 and all(x["verdict"] == "BLOCK" for x in v),
+          f"实际 {[x['verdict'] for x in v]}")
+
+    vb = scanner.policy_verdicts(b_tools, b_findings)
+    check("良性样本 4 个工具全部判 PASS",
+          len(vb) == 4 and all(x["verdict"] == "PASS" for x in vb),
+          f"实际 {[x['verdict'] for x in vb]}")
+
+    s = scanner.policy_summary(v)
+    check("裁决汇总计数正确",
+          s == {"BLOCK": 8, "WARN": 0, "PASS": 0, "total": 8}, f"实际 {s}")
+
+    # 底线：把 block_on 收窄到某条规则后，其余「有告警」的工具只能降到 WARN，不许变 PASS
+    narrowed = scanner.policy_verdicts(tools, findings, block_on=("MS-003",))
+    by = {x["tool"]: x["verdict"] for x in narrowed}
+    check("--block-on 收窄后不把「有告警」误判为 PASS",
+          by.get("send_email") == "BLOCK" and "PASS" not in by.values(),
+          f"实际 {by}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "p.json")
+        run("mcp_shield.py", "scan", ATTACK_PY, "--json", out, "--quiet")
+        try:
+            with open(out, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except Exception as e:                              # noqa: BLE001
+            check("JSON 报告可读取", False, str(e))
+            return
+        pol = d.get("policy") or {}
+        check("JSON 报告带 policy 段",
+              pol.get("summary", {}).get("BLOCK") == 8
+              and len(pol.get("verdicts") or []) == 8
+              and pol.get("block_on") == ["ERROR"],
+              f"实际 {pol.get('summary')}")
+
+        out2 = os.path.join(tmp, "n.json")
+        run("mcp_shield.py", "scan", ATTACK_PY, "--block-on", "MS-003",
+            "--json", out2, "--quiet")
+        with open(out2, encoding="utf-8") as fh:
+            d2 = json.load(fh)
+        check("--block-on 生效并写进 JSON",
+              (d2.get("policy") or {}).get("summary", {}).get("BLOCK") == 1
+              and (d2.get("policy") or {}).get("block_on") == ["MS-003"],
+              f"实际 {(d2.get('policy') or {}).get('summary')}")
+
+        r = run("mcp_shield.py", "config")
+        check("config 说明这是处置建议而非运行时拦截",
+              "不是运行时拦截" in r.stdout, "缺少免责说明")
+        check("config 打印策略默认值",
+              "BLOCK" in r.stdout and "PASS" in r.stdout, "缺少策略行")
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +487,7 @@ def main() -> int:
     check_tag_reversible()
     check_no_live_domains()
     check_ci_workflow()
+    check_policy()
 
     passed = sum(1 for ok, _, _ in _results if ok)
     total = len(_results)

@@ -12,9 +12,14 @@ mcp_shield.py —— MCP Shield 统一入口。
 交叉验证才有意义；把运行层结论直接并进静态告警会污染"独立证据"这一定位
 （详见 README「创新点 ③」）。
 
+**策略裁决**：scan 会把告警按工具聚合成 BLOCK / WARN / PASS 三级并写进
+JSON 的 `policy` 段、SARIF 的 `properties.mcpShieldVerdict`。这是**静态分析
+给出的处置建议，不是运行时拦截** —— 本工具不在 Agent 的调用路径上。
+
 用法示例：
   python mcp_shield.py scan samples/attack/venomous_server.py
   python mcp_shield.py scan . --json reports/scan.json --sarif reports/scan.sarif
+  python mcp_shield.py scan . --block-on ERROR,MS-003 --warn-on WARNING
   python mcp_shield.py probe samples/attack/venomous_server.py
   python mcp_shield.py config
 """
@@ -27,12 +32,24 @@ import sys
 from version import __version__
 
 
+def _selector(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
+    r"""把 --block-on / --warn-on 的逗号列表解析成元组；给空就用默认值。
+
+    元素既可以是严重度（ERROR / WARNING），也可以是规则号（MS-003）。
+    """
+    if not raw:
+        return default
+    parts = tuple(p.strip() for p in raw.split(",") if p.strip())
+    return parts or default
+
+
 def _cmd_scan(args) -> int:
     """静态扫描：按扩展名分派到 Python 或 TS/JS 扫描器，汇总后统一输出。"""
     import scanner
     import tsjs_scanner
 
-    from scanner import Finding, RULES, iter_targets, render_console, render_sarif
+    from scanner import (Finding, RULES, iter_targets, policy_summary,
+                         policy_verdicts, render_console, render_sarif)
 
     targets = iter_targets(args.target)
     if args.lang == "python":
@@ -54,8 +71,12 @@ def _cmd_scan(args) -> int:
         findings.extend(f)
         tools.extend(tl)
 
+    block_on = _selector(args.block_on, scanner.DEFAULT_BLOCK_ON)
+    warn_on = _selector(args.warn_on, scanner.DEFAULT_WARN_ON)
+    verdicts = policy_verdicts(tools, findings, block_on=block_on, warn_on=warn_on)
+
     if not args.quiet:
-        render_console(findings, tools, len(targets), failed=len(errors))
+        render_console(findings, tools, len(targets), failed=len(errors), verdicts=verdicts)
         by_engine = {"python-ast": 0, "tsjs-text": 0}
         for t in targets:
             by_engine["tsjs-text" if tsjs_scanner.is_tsjs(t) else "python-ast"] += 1
@@ -79,6 +100,13 @@ def _cmd_scan(args) -> int:
                 "by_severity": {s: sum(1 for f in findings if f.severity == s)
                                 for s in ("ERROR", "WARNING")},
             },
+            # 策略层：静态分析给出的处置建议，不是运行时拦截（见 README「策略裁决」）
+            "policy": {
+                "block_on": list(block_on),
+                "warn_on": list(warn_on),
+                "summary": policy_summary(verdicts),
+                "verdicts": verdicts,
+            },
             "findings": [f.__dict__ for f in findings],
         }
         with open(args.json, "w", encoding="utf-8") as fh:
@@ -88,7 +116,8 @@ def _cmd_scan(args) -> int:
 
     if args.sarif:
         with open(args.sarif, "w", encoding="utf-8") as fh:
-            json.dump(render_sarif(findings, args.target), fh, ensure_ascii=False, indent=2)
+            json.dump(render_sarif(findings, args.target, verdicts=verdicts),
+                      fh, ensure_ascii=False, indent=2)
         if not args.quiet:
             print(f"[+] SARIF 报告已写入: {args.sarif}")
 
@@ -137,11 +166,15 @@ def _probe_stdout(argv: list[str]) -> int:
 
 def _cmd_config(args) -> int:
     """打印内建规则表，方便现场说明「我们到底检查什么」。"""
+    import scanner
     from scanner import RULES
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump(RULES, fh, ensure_ascii=False, indent=2)
+            json.dump({"rules": RULES,
+                       "policy": {"block_on": list(scanner.DEFAULT_BLOCK_ON),
+                                  "warn_on": list(scanner.DEFAULT_WARN_ON)}},
+                      fh, ensure_ascii=False, indent=2)
         print(f"[+] 规则清单已写入: {args.json}")
         return 0
     print(f"MCP Shield {__version__} · 内建规则 {len(RULES)} 条")
@@ -150,6 +183,9 @@ def _cmd_config(args) -> int:
         print(f" {rid}  {meta['severity']:<7} {meta['name']}")
         print(f"        attack={meta['attack']}  owasp={meta['owasp_llm']}")
     print("-" * 78)
+    print(f" 策略默认：命中 {', '.join(scanner.DEFAULT_BLOCK_ON)} → BLOCK；"
+          f"仅命中 {', '.join(scanner.DEFAULT_WARN_ON)} → WARN；无命中 → PASS。")
+    print(" 策略裁决是静态分析给出的处置建议，不是运行时拦截；可用 scan --block-on / --warn-on 覆盖。")
     print(" 规则语义与 rules/mcp-python.yaml、rules/mcp-typescript.yaml 一一对应。")
     return 0
 
@@ -169,6 +205,10 @@ def main() -> int:
     p_scan.add_argument("--lang", choices=["auto", "python", "ts", "js"], default="auto",
                         help="只扫指定语言（默认 auto：按扩展名分派）")
     p_scan.add_argument("--quiet", action="store_true", help="不打印控制台报告")
+    p_scan.add_argument("--block-on", default=None, metavar="LIST",
+                        help="触发 BLOCK 的严重度或规则号，逗号分隔（默认 ERROR）")
+    p_scan.add_argument("--warn-on", default=None, metavar="LIST",
+                        help="触发 WARN 的严重度或规则号，逗号分隔（默认 WARNING）")
     p_scan.set_defaults(func=_cmd_scan)
 
     p_probe = sub.add_parser("probe", help="运行层取证（跑起 Server 抓 tools/list）")

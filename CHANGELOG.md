@@ -3,6 +3,40 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)，
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.0] - 2026-10-02
+
+### 新增
+
+- **策略裁决层（BLOCK / WARN / PASS）** —— 把告警按「工具」聚合成三级处置建议：
+  `scanner.policy_verdicts()` / `scanner.policy_summary()`。同时进入三处输出：
+  控制台报告的「策略裁决」块、JSON 的 `policy` 段（含 `block_on` / `warn_on` /
+  `summary` / `verdicts`）、SARIF 每条 result 的 `properties.mcpShieldVerdict`。
+- CLI 新增 `--block-on` / `--warn-on`（严重度或规则号，逗号分隔），可把某几条规则
+  单列为硬阻断，例如 `--block-on MS-003` 只拦「描述走私 TAG」。
+- `mcp_shield.py config` 现在同时打印策略默认值；`config --json` 输出结构从裸规则表
+  改为 `{"rules": ..., "policy": {...}}`。
+
+### 修复
+
+- **文档声称的三级裁决层在代码里不存在。** v0.1.0 的 README 与作品报告都把
+  BLOCK / WARN / PASS 写成「系统的裁决层」，并描述成「命中 ERROR 即不返回给模型、
+  要求重新授权」——但全树搜索显示该字段只出现在 Web 控制台展示层
+  （`scripts/ui_server.py`），`scan --json` 与 SARIF 里都没有，CLI 里更没有一个
+  地方算过它。这是典型的「文档写了、代码没做」：最容易在对照代码时被当场抓住。
+  现在两个方向都改了：**裁决真的算出来了**，并且**删掉了所有「运行时拦截」
+  的描述** —— MCP Shield 不在 Agent 的调用路径上，它给的是处置建议，
+  由集成方接到 CI 门禁、准入检查或工单流。
+- **`--out` 文档口径**：`build_release.py` 打印的下一步仍在硬编码 `v0.1.0`，改为读
+  `version.__version__`；`probe_client.py` 的 `clientInfo.version` 也从字面量改为读
+  同一来源。
+
+### 说明
+
+三级裁决有一条底线：**只要命中过任何一条规则，最低也是 WARN。**
+`PASS` 的含义严格限定为「这个工具完全没有命中任何规则」，
+绝不用来表示「我们没看懂」—— 这与 v0.1.0 修掉的「扫不动被当成干净」是同一类错误的
+另一个入口：一个「有 6 条 ERROR 却写着 PASS」的工具会误导使用者。
+
 ## [0.1.0] - 2026-09-30
 
 首个公开版本。定位：面向 MCP / Agent 工具链的投毒检测与运行时防护网关。
@@ -36,7 +70,8 @@
 
 ### 修复
 
-发布前做了一轮「专挑没跑过的路径」的破坏性自检，抓到并修掉 4 个真实缺陷：
+发布前做了一轮「专挑没跑过的路径」的破坏性自检，抓到并修掉 5 个真实缺陷
+（前 4 个在那轮自检里露头，第 5 个在随后打包时才露头）：
 
 - **`probe --out` 直接崩溃**（`OSError: [WinError 193] %1 不是有效的 Win32 应用程序`）。
   根因：`run_forensics()` 里保留了一份「只替换 `python`/`python3`/`py`」的旧判断，
@@ -53,6 +88,10 @@
   （扫描未完成），报告头显式打印 `解析失败: N 个文件 —— 这些文件的内容【未被检查】`。
   目标不存在、语言过滤后无目标同样返回 `2`。
 - **`tsjs_scanner.py --version` 触发 `NameError`**：用到了 `__version__` 却没 import。
+- **打包工具把自己的占位符也替换掉了**：`build_release.py` 的 `_replace_placeholder()`
+  用 `os.walk` 遍历全部文件，把工具自身第 29 行的 `PLACEHOLDER` 常量一起替换成了用户名 ——
+  于是发给别人的构建脚本里写死了一个账号，再跑 `--user X` 还会退化成「把上一个用户名
+  换成 X」。修法：跳过自身文件，并在注释里写明原因。
 
 同时清掉了 `tests/` 里 3 处未关闭文件的 `ResourceWarning`（改为 `with open(...)`）。
 

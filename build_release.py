@@ -24,6 +24,8 @@ import shutil
 import sys
 import zipfile
 
+from version import __version__
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "Desktop", "mcp-shield-release")
 PLACEHOLDER = "REPLACE-WITH-YOUR-USERNAME"
@@ -52,6 +54,7 @@ DIRS = [
     "tests",
     "scripts",
     "ui",
+    "assets",          # README 里引用的真实截图（必须随包发布，否则 README 图片是死链）
     ".github",
 ]
 
@@ -62,8 +65,10 @@ EXCLUDE_NAMES = {
 }
 EXCLUDE_SUFFIX = {
     ".pyc", ".pyo", ".pptx", ".zip", ".log",
-    ".png", ".jpg", ".jpeg",           # 演示图片不入库
+    ".png", ".jpg", ".jpeg",           # 除 assets/ 外，演示图片不入库
 }
+# README 里引用的截图必须随包发出去，否则 clone 下来图片是死链。
+ASSETS_KEEP_SUFFIX = {".png", ".jpg", ".jpeg", ".gif", ".svg"}
 # docs/ 里只保留这几类文件（大纲与脚本），剔除中间产物
 DOCS_KEEP_SUFFIX = {".md", ".py", ".json"}
 
@@ -76,11 +81,14 @@ def _should_skip(rel: str, name: str) -> bool:
         return True
     if JUNK_RE.match(name):
         return True
+    norm = rel.replace("\\", "/")
     suffix = os.path.splitext(name)[1].lower()
+    # assets/ 例外：图片正是它的内容
+    if norm.startswith("assets/"):
+        return suffix not in ASSETS_KEEP_SUFFIX
     if suffix in EXCLUDE_SUFFIX:
         return True
     # docs/ 目录额外收窄
-    norm = rel.replace("\\", "/")
     if norm.startswith("docs/") and suffix and suffix not in DOCS_KEEP_SUFFIX:
         return True
     return False
@@ -285,8 +293,8 @@ def main() -> int:
 
     print("\n 下一步：")
     print(f'   cd "{out}"')
-    print("   git init && git add -A && git commit -m \"MCP Shield v0.1.0\"")
-    print("   然后按桌面《GitHub上传步骤.md》操作。")
+    print(f'   git add -A && git commit -m "MCP Shield v{__version__}"')
+    print("   然后 git push（远程与分支由你的仓库决定）。")
     return 0
 
 

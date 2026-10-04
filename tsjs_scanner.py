@@ -185,6 +185,7 @@ class TSJSScanner:
         """
         desc_line = _line_of(self.source, desc_idx)
         self.tools.append({"name": name, "line": _line_of(self.source, name_idx),
+                           "file": self.path,
                            "desc_line": desc_line, "description": desc})
         self._scan_description(name, desc, desc_line, obj_src or desc)
         self._scan_impl(name, body, _line_of(self.source, body_idx))

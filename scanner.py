@@ -209,7 +209,7 @@ class MCPServerScanner(ast.NodeVisitor):
         if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant):
             desc_line = node.body[0].lineno
 
-        self.tools.append({"name": node.name, "line": node.lineno,
+        self.tools.append({"name": node.name, "line": node.lineno, "file": self.path,
                            "desc_line": desc_line, "description": doc})
 
         # MS-001 描述文本检测
@@ -352,8 +352,90 @@ def iter_targets(root: str) -> list[str]:
     return sorted(out)
 
 
+# 策略层默认值：命中 ERROR 级规则 → BLOCK；只命中 WARNING → WARN；都没有 → PASS。
+# 可用 mcp_shield.py scan --block-on / --warn-on 覆盖（可给严重度，也可给规则号）。
+DEFAULT_BLOCK_ON: tuple[str, ...] = ("ERROR",)
+DEFAULT_WARN_ON: tuple[str, ...] = ("WARNING",)
+
+
+def policy_verdicts(tools: list[dict], findings: list[Finding],
+                    block_on: tuple[str, ...] = DEFAULT_BLOCK_ON,
+                    warn_on: tuple[str, ...] = DEFAULT_WARN_ON) -> list[dict]:
+    """把告警按「工具」聚合成 BLOCK / WARN / PASS 三级裁决。
+
+    **这是静态分析给出的处置建议，不是运行时拦截。** MCP Shield 不在 Agent 的
+    调用路径上，它回答的是「这个工具该不该被信任、该以什么级别上报」，由集成方
+    决定接到 CI 门禁、MCP 客户端加载前的准入检查，还是 SIEM 工单流。
+
+    block_on / warn_on 里的元素既可以是严重度（ERROR / WARNING），也可以是
+    规则号（MS-003），方便使用者把「描述走私 TAG」单列为硬阻断项。
+
+    兜底规则：**只要命中过任何一条规则，最低也是 WARN**。PASS 的含义是
+    「这个工具完全没有命中任何规则」，绝不用来表示「我们没看懂」。
+
+    返回按发现顺序排列的列表，每项形如：
+      {"tool", "file", "line", "verdict", "rules_hit", "max_severity"}
+    """
+    seen: dict[tuple[str, str], dict] = {}
+    order: list[tuple[str, str]] = []
+
+    def _entry(file: str, tool: str, line: int) -> dict:
+        key = (file, tool)
+        if key not in seen:
+            seen[key] = {"tool": tool, "file": file, "line": line,
+                         "rules_hit": [], "block": False, "warn": False,
+                         "max_severity": None}
+            order.append(key)
+        return seen[key]
+
+    for t in tools:
+        _entry(t.get("file") or "", t.get("name") or "", t.get("line") or 0)
+
+    for f in findings:
+        e = _entry(f.file, f.tool, f.line)
+        if f.rule_id not in e["rules_hit"]:
+            e["rules_hit"].append(f.rule_id)
+        if f.severity == "ERROR":
+            e["max_severity"] = "ERROR"
+        elif e["max_severity"] is None:
+            e["max_severity"] = "WARNING"
+        hit = f.severity in block_on or f.rule_id in block_on
+        if hit:
+            e["block"] = True
+        elif f.severity in warn_on or f.rule_id in warn_on:
+            e["warn"] = True
+
+    out: list[dict] = []
+    for key in order:
+        e = seen[key]
+        blocked = e.pop("block")
+        warned = e.pop("warn")
+        # 底线：只要命中过任何规则，最低也是 WARN。
+        # 这样即便使用者用 --block-on 只挑某几条硬阻断，其余有告警的工具也不会
+        # 显示成 PASS —— 一个「有 6 条 ERROR 却写着 PASS」的工具是危险的误导。
+        if blocked:
+            verdict = "BLOCK"
+        elif warned or e["rules_hit"]:
+            verdict = "WARN"
+        else:
+            verdict = "PASS"
+        out.append({"tool": e["tool"], "file": e["file"], "line": e["line"],
+                    "verdict": verdict, "rules_hit": sorted(e["rules_hit"]),
+                    "max_severity": e["max_severity"]})
+    return out
+
+
+def policy_summary(verdicts: list[dict]) -> dict:
+    """三级裁决的计数汇总。"""
+    out = {"BLOCK": 0, "WARN": 0, "PASS": 0, "total": len(verdicts)}
+    for v in verdicts:
+        if v["verdict"] in out:
+            out[v["verdict"]] += 1
+    return out
+
+
 def render_console(findings: list[Finding], tools: list[dict], scanned: int,
-                   failed: int = 0) -> None:
+                   failed: int = 0, verdicts: list[dict] | None = None) -> None:
     icons = {"ERROR": "\033[91mERROR\033[0m", "WARNING": "\033[93mWARN \033[0m"}
     print("=" * 78)
     print(" MCP Shield · 静态扫描报告 (无依赖兜底扫描器)")
@@ -385,10 +467,22 @@ def render_console(findings: list[Finding], tools: list[dict], scanned: int,
             print(f"       │   隐藏字符 {cp['codepoint']} ({cp['name']}) {cp['char_repr']}")
         if len(f.concealed_codepoints) > 6:
             print(f"       │   ... 另有 {len(f.concealed_codepoints) - 6} 个隐藏字符")
+    if verdicts:
+        by = policy_summary(verdicts)
+        print("\n" + "-" * 78)
+        print(" 策略裁决（静态分析给出的处置建议，非运行时拦截）")
+        print(f"   BLOCK {by['BLOCK']}    WARN {by['WARN']}    PASS {by['PASS']}    共 {by['total']} 个工具")
+        for v in verdicts:
+            mark = {"BLOCK": "\033[91mBLOCK\033[0m", "WARN": "\033[93mWARN \033[0m",
+                    "PASS": "\033[92mPASS \033[0m"}[v["verdict"]]
+            rules = ",".join(v["rules_hit"]) if v["rules_hit"] else "-"
+            print(f"   {mark}  {v['tool']:<18} {rules}")
     print("\n" + "=" * 78)
 
 
-def render_sarif(findings: list[Finding], target: str) -> dict:
+def render_sarif(findings: list[Finding], target: str,
+                 verdicts: list[dict] | None = None) -> dict:
+    vmap = {(v["file"], v["tool"]): v["verdict"] for v in (verdicts or [])}
     rules_def = []
     seen = set()
     for f in findings:
@@ -413,6 +507,7 @@ def render_sarif(findings: list[Finding], target: str) -> dict:
             }
         }],
         "partialFingerprints": {"mcpShield/v1": f.fingerprint},
+        "properties": {"mcpShieldVerdict": vmap.get((f.file, f.tool), "PASS")},
     } for f in findings]
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -436,6 +531,10 @@ def main() -> int:
     ap.add_argument("--json", dest="json_out", help="输出 JSON 报告")
     ap.add_argument("--sarif", dest="sarif_out", help="输出 SARIF 报告")
     ap.add_argument("--quiet", action="store_true", help="仅输出 JSON/SARIF，不打印控制台报告")
+    ap.add_argument("--block-on", default=None, metavar="LIST",
+                    help="触发 BLOCK 的严重度或规则号，逗号分隔（默认 ERROR）")
+    ap.add_argument("--warn-on", default=None, metavar="LIST",
+                    help="触发 WARN 的严重度或规则号，逗号分隔（默认 WARNING）")
     ap.add_argument("--version", action="version", version=f"MCP-Shield {__version__}")
     args = ap.parse_args()
 
@@ -451,8 +550,19 @@ def main() -> int:
         all_findings.extend(fs)
         all_tools.extend(ts)
 
+    def _sel(raw, default):
+        if not raw:
+            return default
+        parts = tuple(p.strip() for p in raw.split(",") if p.strip())
+        return parts or default
+
+    block_on = _sel(args.block_on, DEFAULT_BLOCK_ON)
+    warn_on = _sel(args.warn_on, DEFAULT_WARN_ON)
+    verdicts = policy_verdicts(all_tools, all_findings, block_on=block_on, warn_on=warn_on)
+
     if not args.quiet:
-        render_console(all_findings, all_tools, len(targets), failed=len(errors))
+        render_console(all_findings, all_tools, len(targets), failed=len(errors),
+                       verdicts=verdicts)
         if errors:
             print("\n 以下文件未能解析，其内容未被检查：")
             for e in errors:
@@ -472,6 +582,12 @@ def main() -> int:
                 "by_severity": {s: sum(1 for f in all_findings if f.severity == s)
                                 for s in ("ERROR", "WARNING")},
             },
+            "policy": {
+                "block_on": list(block_on),
+                "warn_on": list(warn_on),
+                "summary": policy_summary(verdicts),
+                "verdicts": verdicts,
+            },
             "findings": [asdict(f) for f in all_findings],
         }
         with open(args.json_out, "w", encoding="utf-8") as f:
@@ -481,7 +597,8 @@ def main() -> int:
 
     if args.sarif_out:
         with open(args.sarif_out, "w", encoding="utf-8") as f:
-            json.dump(render_sarif(all_findings, args.target), f, ensure_ascii=False, indent=2)
+            json.dump(render_sarif(all_findings, args.target, verdicts=verdicts),
+                      f, ensure_ascii=False, indent=2)
         if not args.quiet:
             print(f"[+] SARIF 报告已写入: {args.sarif_out}")
 

@@ -35,6 +35,8 @@ import threading
 import time
 from typing import Any
 
+from version import __version__
+
 # ---------------------------------------------------------------------------
 # 不可见 / 危险码点分类表：与 scanner.py 的 MS-002/003/004 判据保持一致
 # ---------------------------------------------------------------------------
@@ -250,7 +252,7 @@ def capture_tools(server_argv: list[str], out_path: str | None = None,
             {
                 "protocolVersion": cli.PROTOCOL_VERSION,
                 "capabilities": {"roots": {"listChanged": False}},
-                "clientInfo": {"name": "mcp-shield-probe", "version": "0.1.0"},
+                "clientInfo": {"name": "mcp-shield-probe", "version": __version__},
             },
         )
         if init is None:
@@ -328,7 +330,7 @@ def run_forensics(server_argv: list[str], out_path: str) -> int:
             {
                 "protocolVersion": cli.PROTOCOL_VERSION,
                 "capabilities": {"roots": {"listChanged": False}},
-                "clientInfo": {"name": "mcp-shield-probe", "version": "0.1.0"},
+                "clientInfo": {"name": "mcp-shield-probe", "version": __version__},
             },
         )
         if init is None:

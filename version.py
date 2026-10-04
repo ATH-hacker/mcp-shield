@@ -6,4 +6,4 @@ JSON 报告的 version 字段、CLI 的 --version 三处输出同一个值，三
 迟早会漂移。改版本只改这里一个地方。
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

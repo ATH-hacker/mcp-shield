@@ -272,6 +272,122 @@ class TestUnscannableIsNotClean(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+class TestPolicyVerdicts(unittest.TestCase):
+    """策略裁决层：BLOCK / WARN / PASS 必须是真的算出来的，不是文案。
+
+    这一层是为修一个真实缺陷而加的：早期文档把三级裁决写成「系统的裁决层」，
+    但 CLI 与 JSON/SARIF 里根本没有这个字段 —— 只有 Web 控制台展示层有。
+    现在它落在 policy_verdicts() 里，并同时进入控制台、JSON 的 policy 段与
+    SARIF 的 properties.mcpShieldVerdict。
+
+    同时钉住一条底线：**只要命中过任何规则，最低也是 WARN**。
+    一个「有 6 条 ERROR 却写着 PASS」的工具会误导使用者。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.attack_findings, cls.attack_tools = scanner.scan_file(ATTACK_PY)
+        cls.benign_findings, cls.benign_tools = scanner.scan_file(BENIGN_PY)
+        cls.ts_findings, cls.ts_tools = tsjs_scanner.scan_tsjs_file(ATTACK_TS)
+
+    def test_attack_tools_all_block(self):
+        v = scanner.policy_verdicts(self.attack_tools, self.attack_findings)
+        self.assertEqual(len(v), 8, "每个发现的工具都要有一条裁决，包括没告警的")
+        self.assertEqual([x["verdict"] for x in v], ["BLOCK"] * 8)
+
+    def test_benign_tools_all_pass(self):
+        v = scanner.policy_verdicts(self.benign_tools, self.benign_findings)
+        self.assertEqual(len(v), 4)
+        self.assertEqual([x["verdict"] for x in v], ["PASS"] * 4)
+
+    def test_summary_counts(self):
+        v = scanner.policy_verdicts(self.attack_tools, self.attack_findings)
+        s = scanner.policy_summary(v)
+        self.assertEqual(s, {"BLOCK": 8, "WARN": 0, "PASS": 0, "total": 8})
+
+    def test_rules_hit_attached_per_tool(self):
+        v = {x["tool"]: x for x in
+             scanner.policy_verdicts(self.attack_tools, self.attack_findings)}
+        self.assertEqual(v["send_email"]["rules_hit"], ["MS-003", "MS-008"])
+        self.assertEqual(v["get_weather"]["rules_hit"], ["MS-001", "MS-002"])
+        self.assertEqual(v["send_email"]["max_severity"], "ERROR")
+
+    def test_tsjs_tools_get_file_key(self):
+        """TS/JS 扫描器也要把 file 写进 tools，否则裁决按 (file, tool) 聚合会错位。"""
+        self.assertTrue(self.ts_findings, "TS 样本上至少要有告警")
+        self.assertEqual(len(self.ts_tools), 8)
+        for t in self.ts_tools:
+            self.assertIn("file", t)
+            self.assertTrue(t["file"].endswith("venomous_server.ts"))
+        v = scanner.policy_verdicts(self.ts_tools, self.ts_findings)
+        self.assertEqual(len(v), 8)
+        self.assertEqual([x["verdict"] for x in v], ["BLOCK"] * 8)
+
+    def test_explicit_block_on_narrows_but_never_says_pass(self):
+        """--block-on MS-003 只把 TAG 走私列为硬阻断，其余有告警的工具降为 WARN。
+
+        关键断言是「没有任何一个命中过规则的工具被判 PASS」。
+        """
+        v = scanner.policy_verdicts(self.attack_tools, self.attack_findings,
+                                    block_on=("MS-003",))
+        by = {x["tool"]: x["verdict"] for x in v}
+        self.assertEqual(by["send_email"], "BLOCK")
+        self.assertEqual(by["read_file"], "WARN", "有 ERROR 告警就不该是 PASS")
+        self.assertNotIn("PASS", by.values())
+
+    def test_no_findings_at_all_is_pass(self):
+        tools = [{"name": "ok_tool", "file": "x.py", "line": 1}]
+        v = scanner.policy_verdicts(tools, [])
+        self.assertEqual(v[0]["verdict"], "PASS")
+        self.assertEqual(v[0]["rules_hit"], [])
+
+    def test_scan_json_carries_policy_block(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "s.json")
+            r = _run("mcp_shield.py", "scan", ATTACK_PY, "--json", out, "--quiet")
+            self.assertEqual(r.returncode, 1)
+            with open(out, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertIn("policy", data, "JSON 必须带 policy 段，文档才不是空话")
+            self.assertEqual(data["policy"]["summary"]["BLOCK"], 8)
+            self.assertEqual(data["policy"]["block_on"], ["ERROR"])
+            self.assertEqual(len(data["policy"]["verdicts"]), 8)
+            self.assertIn("verdict", data["policy"]["verdicts"][0])
+
+    def test_sarif_carries_verdict_per_result(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "s.sarif")
+            r = _run("mcp_shield.py", "scan", ATTACK_PY, "--sarif", out, "--quiet")
+            self.assertEqual(r.returncode, 1)
+            with open(out, encoding="utf-8") as fh:
+                data = json.load(fh)
+            results = data["runs"][0]["results"]
+            self.assertTrue(results)
+            for item in results:
+                self.assertIn("mcpShieldVerdict", item["properties"])
+                self.assertIn(item["properties"]["mcpShieldVerdict"],
+                              ("BLOCK", "WARN", "PASS"))
+            self.assertEqual({r_["properties"]["mcpShieldVerdict"] for r_ in results},
+                             {"BLOCK"})
+
+    def test_config_reports_default_policy(self):
+        r = _run("mcp_shield.py", "config")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("BLOCK", r.stdout)
+        self.assertIn("不是运行时拦截", r.stdout,
+                      "必须写明这一层只是处置建议，不是运行时阻断")
+
+    def test_cli_block_on_flag_is_honoured(self):
+        r = _run("mcp_shield.py", "scan", ATTACK_PY, "--block-on", "MS-003")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("BLOCK 1", r.stdout)
+        self.assertIn("WARN 7", r.stdout)
+
+
 def _has_mcp_sdk() -> bool:
     """运行层测试要真的拉起样本 Server，而样本 Server 依赖 MCP 官方 SDK。
 
