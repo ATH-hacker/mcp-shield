@@ -75,6 +75,10 @@ EXCLUDE_SUFFIX = {
 ASSETS_KEEP_SUFFIX = {".png", ".jpg", ".jpeg", ".gif", ".svg"}
 # docs/ 里只保留这几类文件（大纲与脚本），剔除中间产物
 DOCS_KEEP_SUFFIX = {".md", ".py", ".json"}
+# 会被归一化为 LF 的文本类后缀（二进制文件一律跳过，绝不改字节）
+TEXT_SUFFIX = {".md", ".py", ".html", ".htm", ".txt", ".json", ".yaml", ".yml",
+               ".toml", ".cfg", ".ini", ".js", ".ts", ".css", ".sh"}
+TEXT_NAMES = {".gitignore", ".gitattributes", ".editorconfig", "LICENSE", "NOTICE"}
 
 # 本项目自己的调试垃圾
 JUNK_RE = re.compile(r"^_dbg\d*\.(py|txt|json)$")
@@ -140,6 +144,32 @@ def _replace_placeholder(root: str, user: str) -> int:
             text = text.replace(PLACEHOLDER, user)
             with open(p, "w", encoding="utf-8", newline="") as fh:
                 fh.write(text)
+            changed += 1
+    return changed
+
+
+def _normalize_newlines(root: str) -> int:
+    """把文本类文件统一成 LF。返回被改动的文件数。
+
+    为什么需要：脚本在 Windows 上用文本模式写文件会得到 CRLF，而 git 仓库里
+    存的是 LF。交付副本要求与 GitHub 逐字节一致，若不管，工作区就会比远程多出
+    「行数」个字节（如 console_standalone.html 多 616 字节）。
+    """
+    changed = 0
+    for dirpath, dirs, files in os.walk(root):
+        if ".git" in dirs:
+            dirs.remove(".git")
+        for name in files:
+            suffix = os.path.splitext(name)[1].lower()
+            if suffix not in TEXT_SUFFIX and name not in TEXT_NAMES:
+                continue
+            path = os.path.join(dirpath, name)
+            with open(path, "rb") as fh:
+                raw = fh.read()
+            if b"\r\n" not in raw:
+                continue
+            with open(path, "wb") as fh:
+                fh.write(raw.replace(b"\r\n", b"\n"))
             changed += 1
     return changed
 
@@ -260,7 +290,7 @@ def main() -> int:
     # reports/ 只放一个说明，不放具体产物（可随手重跑）
     rep = os.path.join(out, "reports")
     os.makedirs(rep, exist_ok=True)
-    with open(os.path.join(rep, "README.md"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(rep, "README.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(
             "# reports/\n\n"
             "扫描产物目录。这里**刻意不提交**具体报告文件 —— 它们随时可重新生成，\n"
@@ -275,6 +305,12 @@ def main() -> int:
     written.append("reports/README.md")
     open(os.path.join(rep, ".gitkeep"), "w").close()
 
+    # 统一换行符：仓库里一律按 LF 存储（.gitattributes / core.autocrlf 的默认结果），
+    # 但脚本在 Windows 上用文本模式写出的文件会带 CRLF —— 那样工作区字节数就和
+    # 远程仓库对不上（例如 console_standalone.html 会多出与行数相同的字节）。
+    # 交付副本要求与 GitHub 逐字节一致，所以这里做一次归一化。
+    normalized = _normalize_newlines(out)
+
     changed = 0
     if args.user:
         changed = _replace_placeholder(out, args.user.lstrip("@"))
@@ -283,7 +319,9 @@ def main() -> int:
 
     print("=" * 74)
     print(f" 发布包已生成: {out}")
-    print(f" 文件数: {len(written)}" + (f"（其中 {changed} 个文件替换了用户名占位符）" if args.user else ""))
+    print(f" 文件数: {len(written)}"
+          + (f"（其中 {changed} 个文件替换了用户名占位符）" if args.user else "")
+          + (f"（{normalized} 个文件已归一化为 LF）" if normalized else ""))
     print("=" * 74)
     for f in sorted(written):
         print(f"   {f}")

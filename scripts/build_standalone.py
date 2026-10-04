@@ -87,7 +87,9 @@ def build() -> Path:
     html = html.replace("</script>\n</body>", OFFLINE_PATCH + "\n</script>\n</body>", 1)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(html, encoding="utf-8")
+    # newline="\n"：交付副本要求与 GitHub 逐字节一致，绝不能让 Windows 文本模式
+    # 把 LF 变成 CRLF（否则本地比远程多出「行数」个字节）
+    OUT.write_text(html, encoding="utf-8", newline="\n")
     return OUT
 
 
