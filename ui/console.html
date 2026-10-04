@@ -146,7 +146,7 @@ button.primary{background:#0e3a45;border-color:var(--accent);color:var(--accent)
 <header>
   <div class="brandrow">
     <div class="logo">MCP Shield <small>· 可视化控制台</small></div>
-    <span class="tagline" id="tagline">面向 MCP / Agent 工具链的投毒检测与运行时防护网关</span>
+    <span class="tagline" id="tagline">面向 MCP / Agent 工具链的投毒检测与运行层取证</span>
     <span class="badge" id="proto">协议版本 2024-11-05</span>
     <span class="badge" id="gen">数据生成 …</span>
     <span class="badge" id="src"></span>
@@ -411,9 +411,9 @@ document.getElementById('benign-mini').innerHTML =
 
 function renderDetail(){
   const t = D.tools.find(x=>x.name===sel);
-  const vmap = {BLOCK:['⛔ 已阻断','该工具触发 ERROR 级规则，策略引擎裁决为 BLOCK：不返回给模型，并要求重新授权。'],
-                WARN:['⚠ 放行但标记','仅触发 WARNING 级规则：本轮放行，但写入审计日志并在描述漂移时升级为阻断。'],
-                PASS:['✅ 放行','未命中任何规则，与良性基线一致。']};
+  const vmap = {BLOCK:['⛔ 建议阻断','该工具触发 ERROR 级规则，静态分析给出的处置建议是 BLOCK：不应被信任、需人工复核或拒绝准入。'],
+                WARN:['⚠ 建议观察','仅触发 WARNING 级规则：建议放行但仍标记，并写入台账以便跟踪描述漂移。'],
+                PASS:['✅ 建议放行','未命中任何规则，与良性基线一致。']};
   const [vt, vw] = vmap[t.verdict];
   document.getElementById('verdict').className = 'verdict ' + t.verdict;
   document.getElementById('verdict').innerHTML = `<span>${vt} · ${esc(t.name)}</span><span class="why">${vw}</span>`;
