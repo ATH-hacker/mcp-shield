@@ -6,7 +6,7 @@
 
 把「看不见的攻击」变成屏幕上的证据
 
-[![tests](https://github.com/zjt20070101/mcp-shield/actions/workflows/tests.yml/badge.svg)](https://github.com/zjt20070101/mcp-shield/actions/workflows/tests.yml)
+[![tests](https://github.com/ATH-hacker/mcp-shield/actions/workflows/tests.yml/badge.svg)](https://github.com/ATH-hacker/mcp-shield/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](verify_release.py)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -205,7 +205,7 @@ $ python mcp_shield.py probe samples/attack/venomous_server.py
 **没有安装步骤。** 核心链路零第三方依赖，只用 Python 标准库。
 
 ```bash
-git clone https://github.com/zjt20070101/mcp-shield
+git clone https://github.com/ATH-hacker/mcp-shield
 cd mcp-shield
 python mcp_shield.py config      # 能打出 8 条规则就说明环境 OK
 ```

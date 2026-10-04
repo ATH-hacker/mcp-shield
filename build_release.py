@@ -26,7 +26,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "Desktop", "mcp-shield-release")
-PLACEHOLDER = "zjt20070101"
+PLACEHOLDER = "REPLACE-WITH-YOUR-USERNAME"
 
 # ── 白名单：只有这些会被复制 ────────────────────────────────────────────
 FILES = [
@@ -108,8 +108,14 @@ def _copy_tree(src: str, dst: str, rel: str = "") -> list[str]:
 def _replace_placeholder(root: str, user: str) -> int:
     """把用户名占位符替换成真实用户名。返回改动的文件数。"""
     changed = 0
+    self_name = os.path.basename(__file__)
     for dirpath, _dirs, files in os.walk(root):
         for fn in files:
+            # 不要改写本工具自身：本文件第 29 行的 PLACEHOLDER 常量是「定义」，
+            # 把它替换掉会让 --user 的语义退化成「替换上一个用户名」，
+            # 并且会把用户名写死在发给别人的构建脚本里。
+            if fn == self_name:
+                continue
             p = os.path.join(dirpath, fn)
             try:
                 with open(p, encoding="utf-8") as fh:

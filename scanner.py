@@ -420,7 +420,7 @@ def render_sarif(findings: list[Finding], target: str) -> dict:
         "runs": [{
             "tool": {"driver": {
                 "name": "MCP-Shield",
-                "informationUri": "https://github.com/zjt20070101/mcp-shield",
+                "informationUri": "https://github.com/ATH-hacker/mcp-shield",
                 "version": __version__,
                 "rules": rules_def,
             }},
