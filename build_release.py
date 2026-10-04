@@ -36,6 +36,7 @@ FILES = [
     "mcp_shield.py",
     "version.py",
     "verify_release.py",
+    "measure_memory.py",
     "build_release.py",
     "README.md",
     "LICENSE",
