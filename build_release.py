@@ -57,6 +57,10 @@ DIRS = [
     "assets",          # README 里引用的真实截图（必须随包发布，否则 README 图片是死链）
     ".github",
 ]
+# ── 附加文件：源路径 → 包内路径（docs/ 整体不入包，只挑需要发布的）────────
+EXTRA_FILES = [
+    ("docs/console_standalone.html", "console_standalone.html"),
+]
 
 # ── 黑名单：即使落在白名单目录里也剔除 ──────────────────────────────────
 EXCLUDE_NAMES = {
@@ -243,6 +247,15 @@ def main() -> int:
             continue
         os.makedirs(os.path.join(out, d), exist_ok=True)
         written += _copy_tree(s, os.path.join(out, d), d)
+    for src_rel, dst_rel in EXTRA_FILES:
+        s = os.path.join(ROOT, src_rel)
+        if not os.path.exists(s):
+            print(f"[!] 附加文件不存在，跳过: {src_rel}")
+            continue
+        d = os.path.join(out, dst_rel)
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copy2(s, d)
+        written.append(dst_rel)
 
     # reports/ 只放一个说明，不放具体产物（可随手重跑）
     rep = os.path.join(out, "reports")

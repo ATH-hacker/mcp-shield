@@ -275,7 +275,7 @@ def build_snapshot() -> dict[str, Any]:
         "generated_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "project": {
             "name": "MCP Shield",
-            "subtitle": "面向 MCP / Agent 工具链的投毒检测与运行时防护网关",
+            "subtitle": "面向 MCP / Agent 工具链的投毒检测与运行层取证",
             "protocol_version": "2024-11-05",
         },
         "samples": {

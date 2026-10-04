@@ -293,8 +293,9 @@ python scripts/ui_server.py --open     # 顺便自动打开浏览器
 
 控制台**本体零依赖**（`http.server` + 一个自包含 HTML 页面），点「运行层取证」
 按钮会现场拉起样本 Server 抓报文 —— 不需要预先准备任何数据。
-另外 `scripts/build_standalone.py` 能把快照烤进单页，产出**离线版** HTML，
-没有后端也能演示三栏对照。只有 `scripts/shoot.js` 这个自动截图脚本用到
+包内还自带一份**离线单页版** `console_standalone.html`（数据已内嵌，双击即开，
+不需要起任何服务），适合"浏览器不让开本地端口"的极端场合；它不能点「运行层取证」，
+其余页签与截图完全一致。只有 `scripts/shoot.js` 这个自动截图脚本用到
 `playwright-core`，它不参与任何检测逻辑。
 
 效果长这样（**真实截图，不是示意图**）。左边是人眼看到的，中间是线上报文里真正
@@ -508,6 +509,7 @@ mcp-shield/
 │   ├── ui_server.py           本地可视化控制台
 │   └── build_standalone.py    生成离线单页版控制台
 ├── ui/console.html            控制台前端（自包含单页）
+├── console_standalone.html    离线单页版控制台（数据已内嵌，双击即开）
 ├── assets/                    README 与材料用的真实截图
 ├── .github/workflows/tests.yml
 ├── mcp-shield.toml.example    配置示例

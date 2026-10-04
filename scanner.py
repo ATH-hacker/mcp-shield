@@ -7,7 +7,7 @@ scanner.py —— MCP Shield 无依赖兜底扫描器
   2. semgrep 的规则语法对 MCP 的 AST 结构支持存在版本差异
   3. 本扫描器可作为"语义层"补充，做 semgrep 做不到的跨行/上下文判断
 
-它与 semgrep 共用同一套告警码(MS-00x)，便于运行时拦截层统一引用。
+它与 semgrep 共用同一套告警码(MS-00x)，便于下游把两类结果合并成一份台账。
 
 用法:
   python scanner.py <目标路径> [--json 输出文件.json] [--sarif 输出文件.sarif]

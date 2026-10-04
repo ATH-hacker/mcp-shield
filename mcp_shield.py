@@ -193,7 +193,7 @@ def _cmd_config(args) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="mcp_shield",
-        description="MCP Shield · 面向 MCP / Agent 工具链的投毒检测与运行时防护网关",
+        description="MCP Shield · 面向 MCP / Agent 工具链的投毒检测与运行层取证",
     )
     ap.add_argument("--version", action="version", version=f"MCP-Shield {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
