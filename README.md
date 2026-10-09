@@ -289,6 +289,7 @@ python mcp_shield.py probe npx -y @some-org/some-mcp-server --out reports/traffi
 ```bash
 python scripts/ui_server.py            # 默认 http://127.0.0.1:8787
 python scripts/ui_server.py --open     # 顺便自动打开浏览器
+python scripts/ui_server.py --watch-interval 0.5   # 目录监听轮询间隔（秒）
 ```
 
 控制台**本体零依赖**（`http.server` + 一个自包含 HTML 页面），点「运行层取证」
@@ -297,6 +298,16 @@ python scripts/ui_server.py --open     # 顺便自动打开浏览器
 不需要起任何服务），适合"浏览器不让开本地端口"的极端场合；它不能点「运行层取证」，
 其余页签与截图完全一致。只有 `scripts/shoot.js` 这个自动截图脚本用到
 `playwright-core`，它不参与任何检测逻辑。
+
+**目录监听**：控制台启动时默认带一个本机监听线程，周期核对 `samples/` 与 `rules/`
+下样本文件的内容指纹；文件一被改动（新增 / 修改 / 删除），立刻重跑静态检测并替换快照，
+页面自己刷新 —— 不用重新敲命令，也不用按 F5。右上角有状态角标显示"目录监听中"，
+命中的那一刻会跳出被改动的文件名。
+
+> **边界（与"运行时防护"是两件不同的事）**：监听只改变扫描的**触发时机**，
+> 不改变检测引擎、告警口径与结论；它**不进入 Agent 的调用路径**，不拦截、不代理
+> 任何一次真实工具调用；它是本机轮询（标准库 `threading` + `time.sleep`），
+> 不是生产级 fs 事件订阅；输出仍然只是可审计的处置建议，不是运行时阻断。
 
 效果长这样（**真实截图，不是示意图**）。左边是人眼看到的，中间是线上报文里真正
 传过去的 46 个不可见字符，右边是模型实际读到的那句话：

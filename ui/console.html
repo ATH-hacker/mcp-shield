@@ -4,6 +4,8 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>MCP Shield · 可视化控制台</title>
+<!-- 内联 data-URI 图标：页面保持零外部请求，同时避免浏览器自动去要 /favicon.ico 报 404 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1017'/%3E%3Cpath d='M16 5l9 4v8c0 5-3.8 8.6-9 10-5.2-1.4-9-5-9-10v-8z' fill='none' stroke='%2322d3ee' stroke-width='2.4'/%3E%3Cpath d='M11.5 16.5l3.2 3.2 6-6.4' fill='none' stroke='%2334d399' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E"/>
 <style>
 :root{
   --bg:#0b1017; --bg2:#0f1722; --panel:#121c28; --panel2:#16222f;
@@ -26,6 +28,16 @@ header{position:sticky;top:0;z-index:20;background:linear-gradient(180deg,#0d162
 .tagline{color:var(--muted);font-size:12.5px}
 .badge{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);
   color:var(--muted);background:#0e1823}
+/* 目录监听状态：文件一变，这个角标会自己跳一下 */
+.badge.live{color:#34d399;border-color:#14532d;background:#0c1f18}
+.badge.live b{color:#6ee7b7;font-weight:700}
+.badge.hit{color:#0b1017;background:#34d399;border-color:#34d399;font-weight:800}
+@keyframes watchpulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.55)}
+  100%{box-shadow:0 0 0 12px rgba(52,211,153,0)}}
+.badge.hit{animation:watchpulse .9s ease-out 1}
+@keyframes cardflash{0%{border-color:#34d399;background:#12281f}
+  100%{border-color:var(--line);background:var(--panel)}}
+.card.flash{animation:cardflash 1.4s ease-out 1}
 .tabs{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
 .tab{padding:8px 15px;border:1px solid var(--line);border-bottom:none;border-radius:8px 8px 0 0;
   background:#0d1721;color:var(--muted);cursor:pointer;font-size:13px;user-select:none}
@@ -149,6 +161,7 @@ button.primary{background:#0e3a45;border-color:var(--accent);color:var(--accent)
     <span class="tagline" id="tagline">面向 MCP / Agent 工具链的投毒检测与运行层取证</span>
     <span class="badge" id="proto">协议版本 2024-11-05</span>
     <span class="badge" id="gen">数据生成 …</span>
+    <span class="badge" id="watch">目录监听 …</span>
     <span class="badge" id="src"></span>
   </div>
   <div class="tabs">
@@ -306,7 +319,8 @@ button.primary{background:#0e3a45;border-color:var(--accent);color:var(--accent)
 
 <script id="data" type="application/json">__SNAPSHOT__</script>
 <script>
-const D = JSON.parse(document.getElementById('data').textContent);
+let D = JSON.parse(document.getElementById('data').textContent);
+let sel = null;   // 当前选中的工具名；跨重扫会尽量保留，避免刷新时跳回第一个
 
 /* ---------- 小工具 ---------- */
 const esc = s => (s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -336,12 +350,15 @@ function charGrid(text, opts={}){
 }
 
 /* ---------- 顶栏 ---------- */
-document.getElementById('gen').textContent = '数据生成 ' + D.generated_at;
-document.getElementById('src').textContent = '来源 ' + D.samples.attack.path + ' · ' + D.samples.benign.path;
-document.getElementById('tagline').textContent = D.project.subtitle;
-document.getElementById('proto').textContent = '协议版本 ' + D.project.protocol_version;
+function renderHeader(){
+  document.getElementById('gen').textContent = '数据生成 ' + D.generated_at;
+  document.getElementById('src').textContent = '来源 ' + D.samples.attack.path + ' · ' + D.samples.benign.path;
+  document.getElementById('tagline').textContent = D.project.subtitle;
+  document.getElementById('proto').textContent = '协议版本 ' + D.project.protocol_version;
+}
 
 /* ---------- 视图 1 ---------- */
+function renderView1(){
 const M = D.metrics;
 document.getElementById('cards1').innerHTML = [
   ['恶意 Server 工具数', M.attack_tools, '全部被标记，无漏网'],
@@ -382,15 +399,16 @@ document.getElementById('eye-model').innerHTML =
   `<div style="color:#fca5a5;margin-top:8px">工具 ${esc(gw.name)} 的描述：</div>` +
   `<div style="color:#fff;margin-top:5px">${esc(gw.visible_text.split('.')[0])}.<span class="kill"> ▮▮▮▮</span>${esc((gw.tag_payload||'').slice(0,60))}</div>` +
   `<div class="hint" style="margin-top:9px;color:#fca5a5">↓ 模型读到等价于：<br>「${esc(gw.tag_payload || '（零宽字符夹带指令）')}」</div>`;
+}   /* renderView1 结束 */
 
 /* ---------- 视图 2 ---------- */
+function renderView2(){
 document.getElementById('cards2').innerHTML = [
-  ['拦截裁决', D.blocked.length + ' 个工具被判 BLOCK', 'ERROR 级规则命中即阻断', 'bad'],
+  ['处置裁决', D.blocked.length + ' 个工具被判 BLOCK', 'ERROR 级规则命中即给出建议', 'bad'],
   ['告警码', 'MS-00x', '静态与运行层共用同一编号', 'cy'],
   ['跨层对应', '3 个工具', '静态与报文侧独立命中同一批工具', 'good'],
 ].map(([k,v,s,cls])=>`<div class="card"><div class="k">${k}</div><div class="v ${cls}" style="font-size:20px">${v}</div><div class="s">${s}</div></div>`).join('');
 
-let sel = gw.name;
 function renderTools(){
   document.getElementById('tool-list').innerHTML = D.tools.map(t=>{
     const badge = t.verdict==='BLOCK'?'#f87171':t.verdict==='WARN'?'#fbbf24':'#34d399';
@@ -479,7 +497,14 @@ function renderDetail(){
     : `<div class="tag-ok" style="padding:6px 0">该工具未命中任何静态规则（与良性基线一致）。</div>`;
 }
 
+/* 选中的工具若已不存在（重扫后工具被删/改名），回落到第一个 */
+if (!sel || !D.tools.some(t=>t.name===sel)) sel = (D.tools[0] || {}).name || null;
+renderTools();
+renderDetail();
+}   /* renderView2 结束 */
+
 /* ---------- 视图 3 ---------- */
+function renderView3(){
 document.getElementById('pipeline').innerHTML = D.pipeline.map(p=>`
   <div class="step">
     <div><div class="st">${esc(p.stage)}</div><div class="eng">${esc(p.engine)}</div></div>
@@ -503,8 +528,10 @@ document.getElementById('impl-table').innerHTML = D.impl_evidence.length
       <td><code style="color:#22d3ee">${esc(e.value)}</code><pre class="code" style="margin-top:5px">${esc(e.raw)}</pre></td>
       <td class="small">${esc(e.why)}</td></tr>`).join('') + '</table>'
   : '<div class="tag-ok">未发现实现体层风险。</div>';
+}   /* renderView3 结束 */
 
 /* ---------- 视图 4 ---------- */
+function renderView4(){
 const statusEl = document.getElementById('run-status');
 const resEl = document.getElementById('run-result');
 
@@ -551,21 +578,100 @@ async function runProbe(which){
     statusEl.textContent = '失败：' + e;
   }
 }
+}   /* renderView4 结束 */
 
 /* ---------- 视图 5 ---------- */
+function renderView5(){
 document.getElementById('oneliner').textContent =
   '「在 Agent 时代，被信任的文本就是新的攻击面 —— 我们让这段文本可被审计。」';
 document.getElementById('inno-list').innerHTML = D.narrative.innovation.map(t=>`<li>${t}</li>`).join('');
 document.getElementById('how-list').innerHTML  = D.narrative.how.map(t=>`<li>${t}</li>`).join('');
+const M5 = D.metrics;
 document.getElementById('num-list').innerHTML = [
-  ['阳性样本命中', M.attack_findings + ' 条 (' + M.attack_tools + ' 工具)'],
-  ['良性样本误报', M.benign_findings + ' 条 (' + M.benign_tools + ' 工具)'],
-  ['还原的真实不可见字符', M.hidden_codepoints + ' 个'],
-  ['转义形态载体', M.escape_carriers + ' 处'],
+  ['阳性样本命中', M5.attack_findings + ' 条 (' + M5.attack_tools + ' 工具)'],
+  ['良性样本误报', M5.benign_findings + ' 条 (' + M5.benign_tools + ' 工具)'],
+  ['还原的真实不可见字符', M5.hidden_codepoints + ' 个'],
+  ['转义形态载体', M5.escape_carriers + ' 处'],
   ['被判 BLOCK 的工具', D.blocked.length + ' 个'],
   ['扫描 8 工具耗时', '3.83 ms（中位）'],
   ['第三方依赖', '0'],
 ].map(([k,v])=>`<div class="line"><b>${k}</b><span>${v}</span></div>`).join('');
+}   /* renderView5 结束 */
+
+/* ==========================================================================
+   目录监听：页面轮询 /api/snapshot，后端一重扫这里就自己更新
+   —— 只改变"什么时候重新渲染"，不改变任何检测逻辑与数字口径
+   ========================================================================== */
+let watchSeq = null;
+
+function watchBadge(hit){
+  const el = document.getElementById('watch');
+  if (!el) return;
+  const w = D.watch;
+  el.classList.remove('live','hit');
+  el.style.cursor = '';
+  el.onclick = null;
+  if (!w || !w.enabled){
+    el.textContent = '静态快照 · 未监听';
+    el.title = '本页是一次性快照，不会自动更新（离线单页版即属此类）';
+    // 服务端启动瞬间算出的第一份快照可能落在监听线程启动之前；
+    // 那种情况下重新载入一次就能拿到带监听的快照。
+    if (/^https?:$/.test(location.protocol) && !/离线单页版/.test((w && w.last_reason) || '')){
+      el.textContent = '静态快照 · 点此启用目录监听';
+      el.style.cursor = 'pointer';
+      el.onclick = () => location.reload();
+      el.title = '当前快照没有监听标记。点击重新载入，让服务端带上目录监听。';
+    }
+    return;
+  }
+  el.classList.add('live');
+  if (hit) el.classList.add('hit');
+  const names = (w.last_change_files || []).map(p => p.split('/').pop());
+  const detail = names.length ? '：' + names.join('、') : '';
+  el.innerHTML = hit
+    ? `● 已重扫 <b>第 ${w.scan_count} 次</b>${esc(detail)}`
+    : `● 目录监听中 · 每 ${w.interval}s 自动重扫`;
+  el.title = '监听范围：' + (w.watched_dirs || []).join('、')
+    + '\n最近一次重扫：' + (w.last_scan_at || '—')
+    + (w.last_change_at ? '\n最近一次变更：' + w.last_change_at : '')
+    + '\n扫描触发时机变了，检测引擎与结论没变。';
+}
+
+function renderAll(){
+  D = JSON.parse(document.getElementById('data').textContent);
+  renderHeader();
+  renderView1();
+  renderView2();
+  renderView3();
+  renderView4();
+  renderView5();
+}
+
+function flashCards(){
+  // 只有指标卡会变，闪一下提示"这里是刚刷出来的"
+  document.querySelectorAll('.card').forEach(c=>{
+    c.classList.remove('flash');
+    void c.offsetWidth;      // 强制重排，动画才能重放
+    c.classList.add('flash');
+  });
+}
+
+async function pollSnapshot(){
+  try{
+    const r = await fetch('/api/snapshot', {cache:'no-store'});
+    if (!r.ok) return;
+    const snap = await r.json();
+    if (watchSeq === null){ watchSeq = (snap.watch||{}).scan_count; return; }
+    if (snap.watch && snap.watch.scan_count !== watchSeq){
+      watchSeq = snap.watch.scan_count;
+      D = snap;
+      renderAll();
+      watchBadge(true);
+      flashCards();
+      setTimeout(()=>watchBadge(false), 3500);
+    }
+  }catch(e){ /* 服务已停：静默，下次再试 */ }
+}
 
 /* ---------- Tab 切换 ---------- */
 function showView(vid){
@@ -575,12 +681,25 @@ function showView(vid){
 }
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showView(t.dataset.v));
 
-renderTools();
-renderDetail();
+/* 首次渲染 */
+renderHeader();
+renderView1();
+renderView2();
+renderView3();
+renderView4();
+renderView5();
+watchBadge(false);
 
 /* 支持 ?v=v-before 等深链，便于截图与答辩演示时直接定位页签 */
 const initialView = new URLSearchParams(location.search).get('v');
 if (initialView) showView(initialView);
+
+/* 有后端才轮询；离线单页版（watch.enabled=false）保持静态 */
+const serveFromBackend = /^https?:$/.test(location.protocol);
+if ((D.watch && D.watch.enabled) || serveFromBackend){
+  const tick = Math.max(800, Math.min(4000, ((D.watch && D.watch.interval) || 1) * 1500));
+  setTimeout(function loop(){ pollSnapshot().finally(()=>setTimeout(loop, tick)); }, 800);
+}
 </script>
 </body>
 </html>

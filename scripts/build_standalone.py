@@ -72,7 +72,7 @@ def build() -> Path:
         raise SystemExit(f"[!] 模板不存在: {TEMPLATE}")
 
     print("[*] 正在执行真实扫描（调用 scanner.scan_file，非硬编码）…")
-    snap = uis.build_snapshot()
+    snap = uis.static_watch_state(uis.build_snapshot())
     print(f"    - 恶意样本: {len(snap['tools'])} 个工具 / {snap['metrics']['attack_findings']} 条告警")
     print(f"    - 良性样本: {len(snap['benign_tools'])} 个工具 / {snap['metrics']['benign_findings']} 条告警")
     print(f"    - 真实不可见码点: {snap['metrics']['hidden_codepoints']} 个")

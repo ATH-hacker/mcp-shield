@@ -11,28 +11,44 @@ ui_server.py —— MCP Shield 本地可视化控制台（零第三方依赖，�
     ② 线上报文里真正传了什么（逐码点、不可见字符被点亮）
     ③ 模型把这段文本读成了什么（隐藏载荷被还原出来）
 
-三个视图共同回答三个问题：
-    能做到什么   ->  视图三「隐藏载荷还原」+ 视图一「拦截裁决」
-    原本做不到什么 -> 视图一「原始可见文本」+「常规工具对照」
-    怎么做到的   ->  视图二「检测流水线时间线」（AST / 转义正则 / 码点 三路合流）
-    创新点       ->  页面底部「三句结论」
+三个视图共同回答四个问题：
+    能做到什么     ->  页签①「以前做不到什么」右栏（每条结论配一条可复现证据）
+    原本做不到什么 ->  页签①「改造之前：这些攻击根本不在检测视野里」
+    怎么做到的     ->  页签③「怎么做到的」（AST / 转义正则 / 码点 三路合流）
+    一句话结论     ->  页签⑤「一句话结论」（创新点 + 实测数字 + 边界）
 
 用法
 ----
     python scripts/ui_server.py                 # 默认 http://127.0.0.1:8787
     python scripts/ui_server.py --port 9000 --open
+    python scripts/ui_server.py --watch-interval 0.5    # 目录监听轮询间隔（秒）
+
+目录监听（v1.1 新增）
+--------------------
+控制台默认带一个本机目录监听线程：周期核对两个样本目录的内容指纹，
+一旦文件被改动（新增 / 修改 / 删除），立即重跑静态检测并替换快照，
+页面通过轮询 /api/snapshot 自动刷新 —— 不需要手动敲命令，也不需要刷新页面。
+
+必须说清的边界（与"运行时防护"是两件不同的事）：
+    * 监听只改变扫描的**触发时机**，不改变检测引擎、告警口径与结论；
+    * 它**不进入 Agent 的调用路径**，不拦截、不代理任何一次真实工具调用；
+    * 它是本机轮询（标准库 threading + time.sleep），不是生产级 fs 事件订阅；
+    * 输出仍然是可审计的处置建议，不是运行时阻断。
 
 安全边界：仅监听 127.0.0.1，不做任何外部网络访问，只读本地样本文件。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
 import threading
+import time
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -206,6 +222,135 @@ def build_pipeline(source: str, tools: list[dict], findings: list[Any],
 
 
 # ---------------------------------------------------------------------------
+# 目录监听：文件一落盘就重扫（只改触发时机，不改检测引擎）
+# ---------------------------------------------------------------------------
+WATCH_DIRS = [ROOT / "samples", ROOT / "rules"]  # 真正影响结论的只有这两处输入
+WATCH_SUFFIXES = (".py", ".ts", ".js", ".yaml", ".yml")
+DEFAULT_WATCH_INTERVAL = 1.0  # 秒；单次增量扫描实测约 3.83 ms，轮询开销可忽略
+_TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _now() -> str:
+    return datetime.now().strftime(_TS_FMT)
+
+
+def _iter_watched_files() -> list[Path]:
+    found: list[Path] = []
+    for base in WATCH_DIRS:
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*")):
+            if p.is_file() and p.suffix.lower() in WATCH_SUFFIXES and "__pycache__" not in p.parts:
+                found.append(p)
+    return found
+
+
+class SampleWatcher:
+    """轮询样本目录的内容指纹；指纹一变就重建快照。
+
+    用内容哈希（而不是 mtime）判定变更：同秒内的连续两次保存也能被区分开，
+    不会出现"存了盘但界面不刷新"的假阴性。
+    """
+
+    def __init__(self, interval: float = DEFAULT_WATCH_INTERVAL) -> None:
+        self.interval = max(0.2, float(interval))
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._baseline: dict[str, str] = {}
+        self.state: dict[str, Any] = {
+            # 默认 True：本模块一律是"带监听的服务端"；离线单页版由
+            # build_standalone.py 显式改回 False，页面据此保持静态。
+            "enabled": True,
+            "interval": self.interval,
+            "last_scan_at": None,
+            "last_change_at": None,
+            "last_change_files": [],
+            "scan_count": 0,
+            "watched_files": 0,
+            "watched_dirs": [str(d.relative_to(ROOT)).replace("\\", "/") for d in WATCH_DIRS],
+        }
+
+    # ---- 指纹 ----
+    @staticmethod
+    def _fingerprint() -> dict[str, str]:
+        fp: dict[str, str] = {}
+        for p in _iter_watched_files():
+            try:
+                rel = str(p.relative_to(ROOT)).replace("\\", "/")
+                fp[rel] = hashlib.sha1(p.read_bytes()).hexdigest()
+            except OSError:
+                continue  # 文件正在被写入，下一轮再看
+        return fp
+
+    # ---- 主循环 ----
+    def _loop(self) -> None:
+        baseline = self._baseline
+        while not self._stop.wait(self.interval):
+            current = self._fingerprint()
+            if current == baseline:
+                continue
+            changed = sorted(
+                {k for k in set(baseline) | set(current) if baseline.get(k) != current.get(k)}
+            )
+            baseline = current
+            self._baseline = baseline
+            self.state["last_change_files"] = changed
+            self.state["last_change_at"] = _now()
+            try:
+                Handler.rebuild("目录监听：样本文件发生变化")
+            except Exception as exc:  # 单次重建失败不应该打死监听线程
+                self.state["last_error"] = f"{type(exc).__name__}: {exc}"
+
+    def start(self) -> None:
+        """在主线程里先把基线指纹取好，再交给后台线程比对。
+
+        基线必须在 start() 返回前就确定：否则调用方紧接着的那次写文件会
+        落进"线程还没取基线"的窗口里，被当成基线的一部分而永远检测不到。
+        """
+        self._baseline = self._fingerprint()
+        self.state["watched_files"] = len(self._baseline)
+        self.state["enabled"] = True
+        self._thread = threading.Thread(target=self._loop, name="mcp-shield-watch", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.state["enabled"] = False
+        self._stop.set()
+
+    def mark_static(self) -> None:
+        """离线单页版用：明确声明"本页是静态快照，没有后端在扫"。"""
+        self.state["enabled"] = False
+        self.state["last_reason"] = "离线单页版：导出时扫描一次"
+
+
+def static_watch_state(snap: dict[str, Any]) -> dict[str, Any]:
+    """给离线单页版用：打一个 enabled=False 的 watch 段，页面据此保持静态。"""
+    WATCHER.mark_static()
+    WATCHER.state["last_scan_at"] = _now()
+    WATCHER.state["scan_count"] = 1
+    WATCHER.state["watched_files"] = len(_iter_watched_files())
+    snap["watch"] = dict(WATCHER.state)
+    return snap
+
+
+WATCHER = SampleWatcher()
+
+
+def with_watch_state(snap: dict[str, Any], reason: str) -> dict[str, Any]:
+    """把监听状态打进快照，页面据此显示"监听中"并决定要不要重渲染。
+
+    公开函数：`scripts/build_standalone.py` 也调用它，好让离线单页版拿到
+    同样形状的 `watch` 段（那里 enabled 恒为 False，页面就显示"静态快照"）。
+    """
+    WATCHER.state["last_scan_at"] = _now()
+    WATCHER.state["last_reason"] = reason
+    WATCHER.state["scan_count"] = int(WATCHER.state.get("scan_count", 0)) + 1
+    WATCHER.state["watched_files"] = len(_iter_watched_files())
+    snap["watch"] = dict(WATCHER.state)
+    return snap
+
+
+# ---------------------------------------------------------------------------
 # 单一入口：产出整个控制台所需的真实数据快照
 # ---------------------------------------------------------------------------
 def build_snapshot() -> dict[str, Any]:
@@ -272,7 +417,7 @@ def build_snapshot() -> dict[str, Any]:
     blocked = [t["name"] for t in tools_payload if t["verdict"] == "BLOCK"]
 
     return {
-        "generated_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": _now(),
         "project": {
             "name": "MCP Shield",
             "subtitle": "面向 MCP / Agent 工具链的投毒检测与运行层取证",
@@ -349,6 +494,22 @@ class Handler(BaseHTTPRequestHandler):
     snapshot_cache: dict[str, Any] | None = None
     lock = threading.Lock()
 
+    @classmethod
+    def rebuild(cls, reason: str = "手动重算") -> dict[str, Any]:
+        """重跑静态检测并替换快照。唯一入口，监听线程与 /api/reload 都走这里。"""
+        snap = with_watch_state(build_snapshot(), reason)
+        with cls.lock:
+            cls.snapshot_cache = snap
+        return snap
+
+    @classmethod
+    def snapshot(cls) -> dict[str, Any]:
+        """取当前快照；还没有就现算一次（不打监听计数）。"""
+        with cls.lock:
+            if cls.snapshot_cache is None:
+                cls.snapshot_cache = with_watch_state(build_snapshot(), "启动时首次扫描")
+            return cls.snapshot_cache
+
     def log_message(self, fmt: str, *args: Any) -> None:  # 安静一点
         sys.stderr.write("  [ui] %s\n" % (fmt % args))
 
@@ -370,21 +531,14 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/", "/index.html"):
                 # 服务端注入真实快照，页面自包含：即使存成 .html 双击打开也有效
                 html = (UI_DIR / "console.html").read_text(encoding="utf-8")
-                with Handler.lock:
-                    if Handler.snapshot_cache is None:
-                        Handler.snapshot_cache = build_snapshot()
-                    snap = Handler.snapshot_cache
+                snap = Handler.snapshot()
                 payload = json.dumps(snap, ensure_ascii=False).replace("</", "<\\/")
                 html = html.replace("__SNAPSHOT__", payload)
                 self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
                 return
 
             if path == "/api/snapshot":
-                with Handler.lock:
-                    if Handler.snapshot_cache is None:
-                        Handler.snapshot_cache = build_snapshot()
-                    snap = Handler.snapshot_cache
-                self._json(snap)
+                self._json(Handler.snapshot())
                 return
 
             if path == "/api/runlayer":
@@ -399,9 +553,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/reload":
-                with Handler.lock:
-                    Handler.snapshot_cache = build_snapshot()
+                Handler.rebuild("手动请求 /api/reload")
                 self._json({"ok": True})
+                return
+
+            if path == "/api/watch":
+                self._json(dict(WATCHER.state))
                 return
 
             self._send(404, b"not found", "text/plain; charset=utf-8")
@@ -419,7 +576,12 @@ def main() -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--open", action="store_true", help="启动后自动打开浏览器")
+    ap.add_argument("--watch-interval", type=float, default=DEFAULT_WATCH_INTERVAL,
+                    metavar="SEC", help=f"目录监听轮询间隔秒数（默认 {DEFAULT_WATCH_INTERVAL}）")
     args = ap.parse_args()
+
+    WATCHER.interval = max(0.2, float(args.watch_interval))
+    WATCHER.state["interval"] = WATCHER.interval
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}/"
@@ -429,13 +591,25 @@ def main() -> int:
     print(f" 地址      : {url}")
     print(f" 项目根    : {ROOT}")
     print(f" 数据来源  : scanner.scan_file() 真实调用（非硬编码）")
+    print(f" 目录监听  : 开启，每 {WATCHER.interval:g}s 核对一次内容指纹")
+    print(f" 监听范围  : {', '.join(WATCHER.state['watched_dirs'])}"
+          f"（{', '.join(WATCH_SUFFIXES)}）")
+    print(f" 边界      : 只改变扫描触发时机，不在 Agent 调用路径上，不做运行时拦截")
     print(f" 停止      : Ctrl+C")
     print("=" * 74)
+
+    # 顺序要紧：先把监听挂上，再算首屏快照。
+    # 反过来的话，若浏览器在第一份快照算完、线程还没启动的缝隙里抢到请求，
+    # 那份快照会带 enabled=false，页面就以为自己该保持静态、永远不再轮询。
+    WATCHER.start()
+    Handler.snapshot()
+
     if args.open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
+        WATCHER.stop()
         print("\n[ui] 已停止")
     return 0
 
