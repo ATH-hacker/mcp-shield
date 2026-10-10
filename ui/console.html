@@ -217,7 +217,7 @@ button.primary{background:#0e3a45;border-color:var(--accent);color:var(--accent)
     <div class="cards" id="cards2"></div>
     <div class="split">
       <div>
-        <div class="small" style="margin-bottom:9px">8 个工具 · 点击查看三栏对照</div>
+        <div class="small" style="margin-bottom:9px"><span id="tool-count-label">8</span> 个工具 · 点击查看三栏对照</div>
         <div id="tool-list"></div>
         <div id="benign-mini" style="margin-top:16px"></div>
       </div>
@@ -257,7 +257,7 @@ button.primary{background:#0e3a45;border-color:var(--accent);color:var(--accent)
     </div>
 
     <div class="box" style="margin-bottom:16px">
-      <h3>8 条规则 · 全部为真实命中数（阳性样本 / 良性样本）</h3>
+      <h3><span id="rule-count-label">8</span> 条规则 · 全部为真实命中数（阳性样本 / 良性样本）</h3>
       <div id="rules-table"></div>
     </div>
 
@@ -637,6 +637,16 @@ function watchBadge(hit){
     + '\n扫描触发时机变了，检测引擎与结论没变。';
 }
 
+function renderCounts(){
+  // 这两处小标题里的数字也要跟着快照走，否则目录监听抓到新工具后
+  // 指标卡已经跳到 9，小标题还写着 8，看起来像界面坏了。
+  const M = D.metrics;
+  const t = document.getElementById('tool-count-label');
+  const r = document.getElementById('rule-count-label');
+  if (t) t.textContent = M.attack_tools;
+  if (r) r.textContent = M.rules_total;
+}
+
 function renderAll(){
   D = JSON.parse(document.getElementById('data').textContent);
   renderHeader();
@@ -645,6 +655,7 @@ function renderAll(){
   renderView3();
   renderView4();
   renderView5();
+  renderCounts();
 }
 
 function flashCards(){
@@ -688,6 +699,7 @@ renderView2();
 renderView3();
 renderView4();
 renderView5();
+renderCounts();
 watchBadge(false);
 
 /* 支持 ?v=v-before 等深链，便于截图与答辩演示时直接定位页签 */

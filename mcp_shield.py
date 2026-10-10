@@ -2,25 +2,37 @@
 r"""
 mcp_shield.py —— MCP Shield 统一入口。
 
-把三件事收敛到一条命令，避免使用者记三个脚本名：
+把四件事收敛到一条命令，避免使用者记四个脚本名：
 
-  scan    静态扫描（Python 用 AST，TS/JS 用文本层状态机）
-  probe   运行层取证：真的把 Server 跑起来，抓 tools/list 报文并逐码点解剖
-  config  打印内建规则清单（8 条告警码 + 映射关系）
+  scan     静态扫描（Python 用 AST，TS/JS 用文本层状态机）
+  probe    运行层取证：真的把 Server 跑起来，抓 tools/list 报文并逐码点解剖
+  gateway  可选形态：站在 tools/list 这一跳的 stdio 网关，把不可信工具挡在外面
+  config   打印内建规则清单（8 条告警码 + 映射关系）
 
 设计取舍：默认**不合并** scan 与 probe 的结果。两条证据链各自独立输出，
 交叉验证才有意义；把运行层结论直接并进静态告警会污染"独立证据"这一定位
 （详见 README「创新点 ③」）。
 
 **策略裁决**：scan 会把告警按工具聚合成 BLOCK / WARN / PASS 三级并写进
-JSON 的 `policy` 段、SARIF 的 `properties.mcpShieldVerdict`。这是**静态分析
-给出的处置建议，不是运行时拦截** —— 本工具不在 Agent 的调用路径上。
+JSON 的 `policy` 段、SARIF 的 `properties.mcpShieldVerdict`。
+
+**关于「在不在 Agent 的调用路径上」**——这句必须说准，否则容易被读成夸大：
+  * 默认形态（scan / probe / 可视化控制台）**不在 Agent 的调用路径上**。
+    它们产出的是**可审计的处置建议**，不改变任何一次真实调用的结果。
+  * 可选的 `gateway` 形态**在调用路径上**：它夹在 MCP Client 与 Server 之间，
+    在 `tools/list` 这一跳把判为 BLOCK 的工具**从响应里移除**，这些工具因此
+    不会进入模型的上下文。边界同样要说清：只覆盖 stdio 传输，且只覆盖能在
+    报文体上判定的 MS-001/002/003/004/008 五条规则；MS-005/006/007 需要看
+    工具实现体，那是 scan 的地盘。详见 mcp_shield_gateway.py 的模块文档。
 
 用法示例：
   python mcp_shield.py scan samples/attack/venomous_server.py
   python mcp_shield.py scan . --json reports/scan.json --sarif reports/scan.sarif
   python mcp_shield.py scan . --block-on ERROR,MS-003 --warn-on WARNING
   python mcp_shield.py probe samples/attack/venomous_server.py
+  python mcp_shield.py gateway -- python samples/attack/venomous_server.py
+  python mcp_shield.py gateway --source samples/attack/venomous_server.py \\
+      -- python samples/attack/venomous_server.py
   python mcp_shield.py config
 """
 from __future__ import annotations
@@ -185,9 +197,37 @@ def _cmd_config(args) -> int:
     print("-" * 78)
     print(f" 策略默认：命中 {', '.join(scanner.DEFAULT_BLOCK_ON)} → BLOCK；"
           f"仅命中 {', '.join(scanner.DEFAULT_WARN_ON)} → WARN；无命中 → PASS。")
-    print(" 策略裁决是静态分析给出的处置建议，不是运行时拦截；可用 scan --block-on / --warn-on 覆盖。")
+    print(" 默认形态（scan / probe / 控制台）不在 Agent 的调用路径上，产出的是可审计的处置建议。")
+    print(" 可选形态 gateway 在调用路径上：它在 tools/list 这一跳把 BLOCK 的工具从响应里移除。")
+    print(" 策略裁决的 BLOCK/WARN 阈值可用 scan --block-on / --warn-on 覆盖。")
     print(" 规则语义与 rules/mcp-python.yaml、rules/mcp-typescript.yaml 一一对应。")
     return 0
+
+
+def _cmd_gateway(args) -> int:
+    """可选的 stdio 网关形态：在 tools/list 这一跳做在线裁决。
+
+    这个子命令只是把参数原样交给 ``mcp_shield_gateway.main()`` —— 网关自己
+    负责协议转发、裁决与外层退出码，这里不做任何二次包装，避免两套退出码
+    语义打架。
+    """
+    import mcp_shield_gateway
+
+    argv: list[str] = []
+    if args.report_only:
+        argv.append("--report-only")
+    if args.block_on:
+        argv += ["--block-on", args.block_on]
+    if args.warn_on:
+        argv += ["--warn-on", args.warn_on]
+    if args.out:
+        argv += ["--out", args.out]
+    if args.source:
+        argv += ["--source", args.source]
+    if args.quiet:
+        argv.append("--quiet")
+    argv += [args.server] + (args.server_arg or [])
+    return mcp_shield_gateway.main(argv)
 
 
 def main() -> int:
@@ -220,6 +260,24 @@ def main() -> int:
     p_conf = sub.add_parser("config", help="打印内建规则清单")
     p_conf.add_argument("--json", help="把规则清单写入 JSON 文件")
     p_conf.set_defaults(func=_cmd_config)
+
+    p_gw = sub.add_parser(
+        "gateway",
+        help="可选形态：站在 tools/list 这一跳的 stdio 网关（把 BLOCK 的工具挡在模型上下文之外）",
+    )
+    p_gw.add_argument("server", help="上游 MCP Server 启动命令（如 python）")
+    p_gw.add_argument("server_arg", nargs="*", help="传给上游 Server 的参数")
+    p_gw.add_argument("--source", help="可选：上游 Server 的源码路径，叠上 MS-005/006/007 源码层证据")
+    p_gw.add_argument("--out", default="reports/gateway.jsonl",
+                      help="双向报文落盘路径（默认 reports/gateway.jsonl，传 none 不落盘）")
+    p_gw.add_argument("--report-only", action="store_true",
+                      help="观察模式：照常裁决并打印，但不从响应里移除任何工具")
+    p_gw.add_argument("--block-on", default=None, metavar="LIST",
+                      help="触发 BLOCK 的严重度或规则号，逗号分隔（默认 ERROR）")
+    p_gw.add_argument("--warn-on", default=None, metavar="LIST",
+                      help="触发 WARN 的严重度或规则号，逗号分隔（默认 WARNING）")
+    p_gw.add_argument("--quiet", action="store_true", help="不打印逐工具裁决表")
+    p_gw.set_defaults(func=_cmd_gateway)
 
     args = ap.parse_args()
     return args.func(args)

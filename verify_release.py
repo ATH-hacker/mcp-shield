@@ -26,6 +26,8 @@ verify_release.py —— 发布前的完整可运行性自检（离线、零第�
  12  CI 工作流结构（作业集合、无重复键、每个 step 形态正确）
  13  策略裁决层：BLOCK/WARN/PASS 真的算出来并同时写进控制台、JSON、SARIF，
      且 --block-on 收窄后不把「有告警」的工具误判为 PASS
+ 14  网关形态：把 MCP 客户端真的夹在网关后面跑一遍，断言落在
+      **响应里的工具个数**（8→4 / 加 --source 8→0 / 良性 4→4 / --report-only 不拦）
 
 退出码：0 全部通过；1 有检查失败。
 
@@ -59,7 +61,8 @@ ATTACK_TS = os.path.join(ROOT, "samples", "attack", "venomous_server.ts")
 BENIGN_PY = os.path.join(ROOT, "samples", "benign", "clean_server.py")
 BENIGN_TS = os.path.join(ROOT, "samples", "benign", "clean_server.ts")
 
-CORE_MODULES = ("scanner.py", "tsjs_scanner.py", "probe_client.py", "mcp_shield.py")
+CORE_MODULES = ("scanner.py", "tsjs_scanner.py", "probe_client.py",
+                "mcp_shield_gateway.py", "mcp_shield.py")
 
 _results: list[tuple[bool, str, str]] = []   # (通过?, 检查名, 详情)
 
@@ -85,7 +88,8 @@ def run(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
 # ---------------------------------------------------------------------------
 def check_zero_dependency(verbose: bool) -> None:
     stdlib = set(sys.stdlib_module_names)
-    self_mods = {"scanner", "tsjs_scanner", "probe_client", "version", "mcp_shield"}
+    self_mods = {"scanner", "tsjs_scanner", "probe_client", "version",
+                 "mcp_shield", "mcp_shield_gateway"}
     offenders: dict[str, list[str]] = {}
     for mod in CORE_MODULES:
         path = os.path.join(ROOT, mod)
@@ -105,7 +109,7 @@ def check_zero_dependency(verbose: bool) -> None:
 
     # 再用 -S（不加载 site-packages）真的 import 一次，防止动态导入绕过静态检查
     probe = ("import sys;sys.path.insert(0,%r);" % ROOT +
-             "import scanner,tsjs_scanner,probe_client,mcp_shield;"
+             "import scanner,tsjs_scanner,probe_client,mcp_shield_gateway,mcp_shield;"
              "print('ok')")
     r = subprocess.run([PY, "-S", "-c", probe], cwd=ROOT, capture_output=True,
                        text=True, encoding="utf-8", errors="replace",
@@ -272,8 +276,9 @@ def check_policy() -> None:
               f"实际 {(d2.get('policy') or {}).get('summary')}")
 
         r = run("mcp_shield.py", "config")
-        check("config 说明这是处置建议而非运行时拦截",
-              "不是运行时拦截" in r.stdout, "缺少免责说明")
+        check("config 说清「默认不在调用路径上、gateway 在」",
+              "不在 Agent 的调用路径上" in r.stdout and "gateway" in r.stdout,
+              "缺少形态边界说明")
         check("config 打印策略默认值",
               "BLOCK" in r.stdout and "PASS" in r.stdout, "缺少策略行")
 
@@ -464,6 +469,86 @@ def check_ci_workflow() -> None:
     check("每个 CI 作业无重复键、每个 step 形态正确", not problems, "; ".join(problems))
 
 
+# ---------------------------------------------------------------------------
+# 7. 网关形态（可选部署）
+# ---------------------------------------------------------------------------
+GATEWAY_WIRE_REMOVED = ("read_file", "get_weather", "send_email", "transfer_funds")
+
+
+def _tool_names(tools) -> list[str]:
+    """demo_gateway.talk() 返回的是工具名字符串列表；这里对两种形态都容错。"""
+    out: list[str] = []
+    for t in tools or []:
+        out.append(t if isinstance(t, str) else str((t or {}).get("name")))
+    return out
+
+
+def check_gateway() -> None:
+    """把 MCP 客户端真的夹在网关后面跑一遍，验「工具进不进模型上下文」。
+
+    这一节是网关存在的全部理由：结论不落在"扫出多少条告警"，而落在
+    **响应里的工具个数**。所以断言必须盯住 tools 列表本身 —— 告警条数
+    正常但工具没被移除，是这一节唯一要抓的失败模式。
+    """
+    sys.path.insert(0, ROOT)
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    try:
+        import demo_gateway                                  # noqa: PLC0415
+    except Exception as e:                                   # noqa: BLE001
+        check("网关演示脚本可导入", False, str(e))
+        return
+    check("网关演示脚本可导入", True)
+
+    gw_py = os.path.join(ROOT, "mcp_shield_gateway.py")
+    tmp = tempfile.mkdtemp(prefix="mcpshield-gw-")
+    direct_out = os.path.join(tmp, "direct.jsonl")
+
+    # 链路 A：客户端直连 Server
+    a = demo_gateway.talk([PY, ATTACK_PY], direct_out)
+    if not a.get("ok"):
+        check("直连恶意 Server 能列出工具", False, str(a.get("error") or a.get("stderr"))[-300:])
+        return
+    check("直连恶意 Server 能列出工具", len(a["tools"]) == 8,
+          f"实际 {len(a['tools'])} 个")
+
+    # 链路 B：客户端 → 网关 → Server（网关只看报文，不看源码）
+    b = demo_gateway.talk([PY, gw_py, "--out", "none", PY, ATTACK_PY],
+                          os.path.join(tmp, "b.jsonl"))
+    if not b.get("ok"):
+        check("经网关仍能完成 tools/list 握手", False, str(b.get("error") or b.get("stderr"))[-300:])
+        return
+    check("经网关仍能完成 tools/list 握手", True)
+    names_b = _tool_names(b["tools"])
+    check("网关只放行未被判 BLOCK 的工具（8 → 4）", len(names_b) == 4,
+          f"实际 {len(names_b)} 个：{names_b}")
+    check("被移出的正是静态层判 ERROR 的那 4 个",
+          set(GATEWAY_WIRE_REMOVED) & set(names_b) == set(),
+          f"仍在放行列表里：{sorted(set(GATEWAY_WIRE_REMOVED) & set(names_b))}")
+
+    # 链路 C：网关 + --source，源码层证据叠上来 → 8 个全部拦下
+    c = demo_gateway.talk([PY, gw_py, "--out", "none", "--source", ATTACK_PY,
+                           PY, ATTACK_PY], os.path.join(tmp, "c.jsonl"))
+    check("网关 + --source 后 8 个工具全部被拦（0 个到达模型）",
+          c.get("ok") and len(c["tools"]) == 0,
+          f"实际 {len(c.get('tools') or [])} 个 / ok={c.get('ok')}")
+
+    # 链路 D：良性样本必须原样放行 —— 拦得住不算本事，不误伤才算
+    d_direct = demo_gateway.talk([PY, BENIGN_PY], os.path.join(tmp, "d1.jsonl"))
+    d_gw = demo_gateway.talk([PY, gw_py, "--out", "none", "--source", BENIGN_PY,
+                              PY, BENIGN_PY], os.path.join(tmp, "d2.jsonl"))
+    check("良性样本经网关 4 → 4，零误伤",
+          d_direct.get("ok") and d_gw.get("ok") and len(d_direct["tools"]) == 4
+          and len(d_gw["tools"]) == 4,
+          f"直连 {len(d_direct.get('tools') or [])} / 经网关 {len(d_gw.get('tools') or [])}")
+
+    # 链路 E：--report-only 只报不拦 —— 这是"先观察再上线"的安全阀
+    e = demo_gateway.talk([PY, gw_py, "--out", "none", "--report-only",
+                           PY, ATTACK_PY], os.path.join(tmp, "e.jsonl"))
+    check("--report-only 模式下 8 个工具全部保留（只报不拦）",
+          e.get("ok") and len(e["tools"]) == 8,
+          f"实际 {len(e.get('tools') or [])} 个 / ok={e.get('ok')}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="MCP Shield 发布前完整自检")
     ap.add_argument("--verbose", action="store_true", help="打印每一项的详情")
@@ -473,17 +558,19 @@ def main() -> int:
     print(f" MCP Shield · 发布前自检   python={sys.version.split()[0]}   {sys.platform}")
     print("=" * 74)
 
-    print("\n[1/6] 零第三方依赖")
+    print("\n[1/7] 零第三方依赖")
     check_zero_dependency(args.verbose)
-    print("\n[2/6] 样本检出结果与退出码")
+    print("\n[2/7] 样本检出结果与退出码")
     check_samples(args.verbose)
-    print("\n[3/6] SARIF 报告结构")
+    print("\n[3/7] SARIF 报告结构")
     check_sarif()
-    print("\n[4/6] 运行层取证（真的拉起 Server）")
+    print("\n[4/7] 运行层取证（真的拉起 Server）")
     check_runlayer()
-    print("\n[5/6] 性能")
+    print("\n[5/7] 网关形态（真的把客户端夹在网关后面）")
+    check_gateway()
+    print("\n[6/7] 性能")
     check_performance(args.verbose)
-    print("\n[6/6] 其他一致性")
+    print("\n[7/7] 其他一致性")
     check_tag_reversible()
     check_no_live_domains()
     check_ci_workflow()

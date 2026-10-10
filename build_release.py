@@ -35,6 +35,7 @@ FILES = [
     "scanner.py",
     "tsjs_scanner.py",
     "probe_client.py",
+    "mcp_shield_gateway.py",
     "mcp_shield.py",
     "version.py",
     "verify_release.py",
